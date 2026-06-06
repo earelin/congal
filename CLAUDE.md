@@ -58,15 +58,20 @@ The data flow is: **GUI → Worker thread → scraper/sync/db → events back to
     `ContractDetail` + per-lot `Resolucion` rows.
   - `options.rs` — parses the filter dropdowns from `portada.jsp` into `FilterOptions`.
 
-- **`db.rs`** — SQLite schema and queries (`Db`). Three tables: `contracts` (listing),
-  `contract_detail` (1:1), `contract_resolucion` (1:N per lot), plus a `meta` key/value
-  table (e.g. `ultima_sync`). WAL mode, foreign keys on. `upsert_*` are the write paths;
-  `query_local` powers the offline Local tab, including search by adxudicatario.
+- **`db.rs`** — SQLite schema and queries (`Db`). Tables: `contracts` (listing, normalised:
+  only `importe_num`, dates stored as ISO 8601 text, `cod_organismo` FK), `organismos`
+  (`cod_organismo` → `nome`, the organism name lives here, loaded via JOIN), `contract_detail`
+  (1:1), `contract_resolucion` (1:N per lot), plus a `meta` key/value table (e.g. `ultima_sync`).
+  WAL mode, foreign keys on. The project is a **prototype**: no schema versioning/migration —
+  delete the local `.sqlite` to apply schema changes. `upsert_*` are the write paths;
+  `query_local` powers the offline Local tab (one row per contract, lotes aggregated;
+  importe/date/organismo are derived for display), including search by adxudicatario.
 
 - **`model.rs`** — all domain types and pure helpers. Notable: `EstadoGroup` maps the four
-  UI status checkboxes to the numeric `ESTADO` codes the server expects; `parse_importe`
-  normalises Galician-formatted amounts (`1.000.000,00 €`) to `f64`; `is_estado_terminal`
-  drives the incremental-sync skip decision.
+  UI status checkboxes to the numeric `ESTADO` codes the server expects; `parse_importe` /
+  `format_importe` convert between Galician-formatted amounts (`1.000.000,00 €`) and `f64`;
+  `parse_data` / `format_data_gl` convert between portal dates, ISO 8601, and `DD/MM/YYYY`
+  display; `is_estado_terminal` drives the incremental-sync skip decision.
 
 - **`export.rs`** — writes the filtered local rows to an OpenDocument Spreadsheet (`.ods`)
   via `spreadsheet-ods`.

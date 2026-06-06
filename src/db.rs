@@ -1,8 +1,8 @@
 //! Persistencia en SQLite (rusqlite, bundled).
 
 use crate::model::{
-    ContractDetail, ContractSummary, LocalFilters, LocalRow, Resolucion, normalize_search,
-    parse_importe,
+    ContractDetail, ContractSummary, LocalFilters, LocalRow, Resolucion, format_data_gl,
+    format_importe, normalize_search, parse_data, parse_importe,
 };
 use anyhow::Result;
 use rusqlite::functions::FunctionFlags;
@@ -76,18 +76,23 @@ impl Db {
     fn init_schema(&self) -> Result<()> {
         self.conn.execute_batch(
             r#"
+            -- Nome dos organismos, normalizado nunha táboa propia e referenciado
+            -- desde `contracts` polo seu código.
+            CREATE TABLE IF NOT EXISTS organismos (
+                cod_organismo TEXT PRIMARY KEY,
+                nome          TEXT
+            );
+
             CREATE TABLE IF NOT EXISTS contracts (
                 id                TEXT PRIMARY KEY,
                 referencia        TEXT,
                 asunto            TEXT,
                 importe_num       REAL,
-                importe_txt       TEXT,
                 estado            TEXT,
-                data_publicacion  TEXT,
-                cod_organismo     TEXT,
-                organismo         TEXT,
+                data_publicacion  TEXT,   -- ISO 8601 'YYYY-MM-DD'
+                cod_organismo     TEXT REFERENCES organismos(cod_organismo),
                 detalle_descargado INTEGER NOT NULL DEFAULT 0,
-                actualizado_en    TEXT
+                actualizado_en    TEXT    -- ISO 8601 'YYYY-MM-DD HH:MM:SS'
             );
 
             CREATE TABLE IF NOT EXISTS contract_detail (
@@ -155,33 +160,42 @@ impl Db {
     pub fn upsert_summaries(&mut self, rows: &[ContractSummary], now: &str) -> Result<()> {
         let tx = self.conn.transaction()?;
         {
+            // Primeiro os organismos (a FK de `contracts` apunta a esta táboa).
+            let mut org_stmt = tx.prepare(
+                r#"INSERT INTO organismos (cod_organismo, nome) VALUES (?1, ?2)
+                   ON CONFLICT(cod_organismo) DO UPDATE SET nome=excluded.nome"#,
+            )?;
+            for r in rows {
+                if !r.cod_organismo.trim().is_empty() {
+                    org_stmt.execute(params![r.cod_organismo, r.organismo])?;
+                }
+            }
+
             let mut stmt = tx.prepare(
                 r#"INSERT INTO contracts
-                    (id, referencia, asunto, importe_num, importe_txt, estado,
-                     data_publicacion, cod_organismo, organismo, actualizado_en)
-                   VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)
+                    (id, referencia, asunto, importe_num, estado,
+                     data_publicacion, cod_organismo, actualizado_en)
+                   VALUES (?1,?2,?3,?4,?5,?6,?7,?8)
                    ON CONFLICT(id) DO UPDATE SET
                      referencia=excluded.referencia,
                      asunto=excluded.asunto,
                      importe_num=excluded.importe_num,
-                     importe_txt=excluded.importe_txt,
                      estado=excluded.estado,
                      data_publicacion=excluded.data_publicacion,
                      cod_organismo=excluded.cod_organismo,
-                     organismo=excluded.organismo,
                      actualizado_en=excluded.actualizado_en"#,
             )?;
             for r in rows {
+                // `cod_organismo` baleiro gárdase como NULL para non violar a FK.
+                let cod = Some(r.cod_organismo.trim()).filter(|c| !c.is_empty());
                 stmt.execute(params![
                     r.id,
                     r.referencia,
                     r.asunto,
                     parse_importe(&r.importe),
-                    r.importe,
                     r.estado,
-                    r.publicacion,
-                    r.cod_organismo,
-                    r.organismo,
+                    parse_data(&r.publicacion),
+                    cod,
                     now,
                 ])?;
             }
@@ -305,11 +319,12 @@ impl Db {
     pub fn query_local(&self, f: &LocalFilters) -> Result<Vec<LocalRow>> {
         let mut sql = String::from(
             r#"SELECT c.id, COALESCE(c.referencia,''), COALESCE(c.asunto,''),
-                      COALESCE(c.importe_txt,''), COALESCE(c.estado,''),
-                      COALESCE(c.data_publicacion,''), COALESCE(c.organismo,''),
+                      c.importe_num, COALESCE(c.estado,''),
+                      COALESCE(c.data_publicacion,''), COALESCE(o.nome,''),
                       COALESCE(r.adxudicatarios,''), r.importe_total,
                       COALESCE(d.enlace_resolucion,'')
                FROM contracts c
+               LEFT JOIN organismos o ON o.cod_organismo = c.cod_organismo
                LEFT JOIN contract_detail d ON d.contract_id = c.id
                LEFT JOIN (
                    SELECT contract_id,
@@ -328,7 +343,7 @@ impl Db {
             args.push(like);
         }
         if !f.organismo.trim().is_empty() {
-            sql.push_str(" AND nrm(c.organismo) LIKE ?");
+            sql.push_str(" AND nrm(o.nome) LIKE ?");
             args.push(format!("%{}%", normalize_search(&f.organismo)));
         }
         if !f.estado.trim().is_empty() {
@@ -354,19 +369,19 @@ impl Db {
         let params_dyn: Vec<&dyn rusqlite::ToSql> =
             args.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
         let rows = stmt.query_map(params_dyn.as_slice(), |row| {
+            let importe_num: Option<f64> = row.get(3)?;
+            let data_iso: String = row.get(5)?;
             let importe_total: Option<f64> = row.get(8)?;
             Ok(LocalRow {
                 id: row.get(0)?,
                 referencia: row.get(1)?,
                 asunto: row.get(2)?,
-                importe_txt: row.get(3)?,
+                importe_txt: importe_num.map(format_importe).unwrap_or_default(),
                 estado: row.get(4)?,
-                publicacion: row.get(5)?,
+                publicacion: format_data_gl(&data_iso),
                 organismo: row.get(6)?,
                 adxudicatario: row.get(7)?,
-                importe_resolucion_txt: importe_total
-                    .map(crate::model::format_importe)
-                    .unwrap_or_default(),
+                importe_resolucion_txt: importe_total.map(format_importe).unwrap_or_default(),
                 enlace_resolucion: row.get(9)?,
             })
         })?;
@@ -450,8 +465,8 @@ impl Db {
              WHERE TRIM(COALESCE(adxudicatario,'')) <> '' ORDER BY adxudicatario COLLATE NOCASE",
         )?;
         let organismos = self.distinct(
-            "SELECT DISTINCT organismo FROM contracts \
-             WHERE TRIM(COALESCE(organismo,'')) <> '' ORDER BY organismo COLLATE NOCASE",
+            "SELECT nome FROM organismos \
+             WHERE TRIM(COALESCE(nome,'')) <> '' ORDER BY nome COLLATE NOCASE",
         )?;
         let estados = self.distinct(
             "SELECT DISTINCT estado FROM contracts \
@@ -500,7 +515,9 @@ mod tests {
             importe: String::new(),
             estado: estado.into(),
             publicacion: pub_.into(),
-            cod_organismo: String::new(),
+            // Código derivado do nome (basta con que sexa estable e non baleiro
+            // para que o JOIN con `organismos` devolva o nome).
+            cod_organismo: format!("OR-{organismo}"),
             organismo: organismo.into(),
         }
     }
@@ -543,6 +560,47 @@ mod tests {
             .expect("a consulta non debe fallar con adxudicatario NULL");
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].id, "1");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    // Tras normalizar: o nome do organismo cárgase vía JOIN, a data gárdase en
+    // ISO e amósase como DD/MM/YYYY, e o importe da fila vén de `importe_num`.
+    #[test]
+    fn normalizacion_organismo_data_e_importe() {
+        let path = std::env::temp_dir().join("congal_test_norm.sqlite");
+        let _ = std::fs::remove_file(&path);
+        let mut db = Db::open(&path).expect("db");
+
+        let s = ContractSummary {
+            id: "100".into(),
+            referencia: "R100".into(),
+            asunto: "obra".into(),
+            importe: "1.234,56 €".into(),
+            estado: "Adxudicado".into(),
+            publicacion: "15-03-2025".into(),
+            cod_organismo: "ORG1".into(),
+            organismo: "Concello da Coruña".into(),
+        };
+        db.upsert_summaries(&[s], "2025-03-16 10:00:00").expect("upsert");
+
+        // O organismo quedou na súa táboa e aparece nas opcións locais.
+        let opts = db.local_options().expect("options");
+        assert_eq!(opts.organismos, vec!["Concello da Coruña".to_string()]);
+
+        let rows = db.query_local(&LocalFilters::default()).expect("query");
+        assert_eq!(rows.len(), 1);
+        let r = &rows[0];
+        assert_eq!(r.organismo, "Concello da Coruña"); // vía JOIN
+        assert_eq!(r.publicacion, "15/03/2025"); // ISO -> presentación
+        assert_eq!(r.importe_txt, "1.234,56 €"); // formatado desde importe_num
+
+        // O filtro por organismo (insensible a acentos) atopa o contrato.
+        let f = LocalFilters {
+            organismo: "coruna".into(),
+            ..Default::default()
+        };
+        assert_eq!(db.query_local(&f).expect("query org").len(), 1);
 
         let _ = std::fs::remove_file(&path);
     }

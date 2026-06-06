@@ -1,6 +1,6 @@
 //! Modelos de datos da aplicación.
 
-use chrono::{Datelike, Local};
+use chrono::{Datelike, Local, NaiveDate};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 
@@ -201,6 +201,30 @@ pub fn parse_importe(s: &str) -> Option<f64> {
     normalized.parse::<f64>().ok()
 }
 
+/// Normaliza unha data do portal a ISO 8601 (`YYYY-MM-DD`). Acepta os formatos
+/// que devolve o sitio (`DD-MM-YYYY`, `DD/MM/YYYY`) e tamén o propio ISO; ignora
+/// unha posible hora ao final. Devolve `None` se non se pode interpretar.
+pub fn parse_data(s: &str) -> Option<String> {
+    let token = s.trim().split_whitespace().next().unwrap_or("");
+    if token.is_empty() {
+        return None;
+    }
+    for fmt in ["%d-%m-%Y", "%d/%m/%Y", "%Y-%m-%d", "%Y/%m/%d"] {
+        if let Ok(d) = NaiveDate::parse_from_str(token, fmt) {
+            return Some(d.format("%Y-%m-%d").to_string());
+        }
+    }
+    None
+}
+
+/// Formatea unha data ISO (`YYYY-MM-DD`) para presentación en galego
+/// (`DD/MM/YYYY`). Se non é unha data ISO válida, devolve a entrada sen tocar.
+pub fn format_data_gl(iso: &str) -> String {
+    NaiveDate::parse_from_str(iso.trim(), "%Y-%m-%d")
+        .map(|d| d.format("%d/%m/%Y").to_string())
+        .unwrap_or_else(|_| iso.to_string())
+}
+
 /// Formatea un importe `f64` ao formato galego/español (`1.234.567,89 €`),
 /// con punto como separador de millares e coma como decimal. Inverso de
 /// [`parse_importe`].
@@ -270,6 +294,26 @@ mod tests {
         assert_eq!(format_importe(3500.5), "3.500,50 €");
         // Ida e volta: o que formatea debe poder reanalizarse.
         assert_eq!(parse_importe(&format_importe(1234.56)), Some(1234.56));
+    }
+
+    #[test]
+    fn parsea_datas_a_iso() {
+        assert_eq!(parse_data("01-02-2025").as_deref(), Some("2025-02-01"));
+        assert_eq!(parse_data("1/2/2025").as_deref(), Some("2025-02-01"));
+        assert_eq!(parse_data("2025-02-01").as_deref(), Some("2025-02-01"));
+        // Ignórase a hora final.
+        assert_eq!(parse_data("01-02-2025 13:45").as_deref(), Some("2025-02-01"));
+        assert_eq!(parse_data(""), None);
+        assert_eq!(parse_data("sen data"), None);
+    }
+
+    #[test]
+    fn formatea_data_para_presentacion() {
+        assert_eq!(format_data_gl("2025-02-01"), "01/02/2025");
+        // Entrada non ISO: devólvese tal cal.
+        assert_eq!(format_data_gl("sen data"), "sen data");
+        // Ida e volta.
+        assert_eq!(parse_data(&format_data_gl("2024-12-31")).as_deref(), Some("2024-12-31"));
     }
 
     #[test]
