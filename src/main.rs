@@ -19,7 +19,7 @@ pub fn now_string() -> String {
 
 /// Ruta da base de datos local (cartafol de datos do usuario).
 pub fn db_path() -> PathBuf {
-    if let Some(dirs) = directories::ProjectDirs::from("gal", "cgscrapper", "cg-scrapper") {
+    if let Some(dirs) = directories::ProjectDirs::from("gal", "congal", "congal") {
         let dir = dirs.data_dir().to_path_buf();
         let _ = std::fs::create_dir_all(&dir);
         return dir.join("contratos.sqlite");

@@ -851,31 +851,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 
 [[package]]
-name = "cg-scrapper"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "dark-light",
- "directories",
- "eframe",
- "egui",
- "egui_extras",
- "encoding_rs",
- "html-escape",
- "open",
- "regex",
- "reqwest",
- "rfd",
- "rusqlite",
- "scraper",
- "serde",
- "serde_json",
- "spreadsheet-ods",
- "thiserror 2.0.18",
-]
-
-[[package]]
 name = "cgl"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -986,6 +961,31 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4ca0197aee26d1ae37445ee532fefce43251d24cc7c166799f4d46817f1d3973"
 dependencies = [
  "crossbeam-utils",
+]
+
+[[package]]
+name = "congal"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "dark-light",
+ "directories",
+ "eframe",
+ "egui",
+ "egui_extras",
+ "encoding_rs",
+ "html-escape",
+ "open",
+ "regex",
+ "reqwest",
+ "rfd",
+ "rusqlite",
+ "scraper",
+ "serde",
+ "serde_json",
+ "spreadsheet-ods",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

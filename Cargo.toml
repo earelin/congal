@@ -1,5 +1,5 @@
 [package]
-name = "cg-scrapper"
+name = "congal"
 version = "0.1.0"
 edition = "2024"
 

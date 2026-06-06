@@ -23,7 +23,7 @@ impl Client {
         let http = reqwest::blocking::Client::builder()
             .cookie_store(true)
             .user_agent(
-                "Mozilla/5.0 (compatible; cg-scrapper/0.1; +https://www.contratosdegalicia.gal)",
+                "Mozilla/5.0 (compatible; congal/0.1; +https://www.contratosdegalicia.gal)",
             )
             .gzip(true)
             .timeout(Duration::from_secs(180))

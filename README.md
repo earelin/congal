@@ -1,4 +1,4 @@
-# cg-scrapper
+# congal
 
 Aplicación de escritorio (Windows / macOS / Linux) escrita en **Rust** para extraer,
 almacenar e exportar a información de contratos públicos da Xunta de Galicia desde
@@ -27,7 +27,7 @@ Requírese Rust estable (edición 2024).
 
 ```bash
 cargo build --release
-./target/release/cg-scrapper
+./target/release/congal
 ```
 
 Non hai dependencias de sistema: SQLite vai incluído (`rusqlite/bundled`), o TLS é `rustls`
@@ -43,7 +43,7 @@ cargo test --release -- --ignored --nocapture live_end_to_end   # proba en vivo 
 ## Onde se gardan os datos
 
 A base de datos `contratos.sqlite` créase no cartafol de datos do usuario
-(`directories::ProjectDirs`), p.ex. `~/.local/share/cg-scrapper/` en Linux.
+(`directories::ProjectDirs`), p.ex. `~/.local/share/congal/` en Linux.
 
 ## Notas técnicas
 
