@@ -201,6 +201,28 @@ pub fn parse_importe(s: &str) -> Option<f64> {
     normalized.parse::<f64>().ok()
 }
 
+/// Formatea un importe `f64` ao formato galego/español (`1.234.567,89 €`),
+/// con punto como separador de millares e coma como decimal. Inverso de
+/// [`parse_importe`].
+pub fn format_importe(v: f64) -> String {
+    let neg = v < 0.0;
+    let cents = (v.abs() * 100.0).round() as u64;
+    let euros = cents / 100;
+    let dec = cents % 100;
+
+    // Agrupar os enteiros en grupos de tres díxitos cun punto.
+    let digits = euros.to_string();
+    let mut enteiro = String::new();
+    let len = digits.len();
+    for (i, ch) in digits.chars().enumerate() {
+        if i > 0 && (len - i) % 3 == 0 {
+            enteiro.push('.');
+        }
+        enteiro.push(ch);
+    }
+    format!("{}{enteiro},{dec:02} €", if neg { "-" } else { "" })
+}
+
 /// Fila combinada para a táboa de resultados locais.
 #[derive(Debug, Clone, Default)]
 pub struct LocalRow {
@@ -237,6 +259,17 @@ mod tests {
         assert_eq!(parse_importe("500,00"), Some(500.0));
         assert_eq!(parse_importe("_"), None);
         assert_eq!(parse_importe(""), None);
+    }
+
+    #[test]
+    fn formatea_importe_galego() {
+        assert_eq!(format_importe(1_000_000.0), "1.000.000,00 €");
+        assert_eq!(format_importe(3502.22), "3.502,22 €");
+        assert_eq!(format_importe(500.0), "500,00 €");
+        assert_eq!(format_importe(0.0), "0,00 €");
+        assert_eq!(format_importe(3500.5), "3.500,50 €");
+        // Ida e volta: o que formatea debe poder reanalizarse.
+        assert_eq!(parse_importe(&format_importe(1234.56)), Some(1234.56));
     }
 
     #[test]

@@ -298,18 +298,26 @@ impl Db {
         })
     }
 
-    /// Consulta local con filtros, devolvendo filas combinadas (un contrato pode
-    /// aparecer varias veces se ten varios lotes con adxudicatario distinto).
+    /// Consulta local con filtros, devolvendo **unha fila por contrato**. Os
+    /// lotes/resolucións agréganse: a columna de adxudicatario lista os distintos
+    /// adxudicatarios e a de importe de resolución amosa a suma adxudicada (o
+    /// desglose por lote vese na vista de detalle).
     pub fn query_local(&self, f: &LocalFilters) -> Result<Vec<LocalRow>> {
         let mut sql = String::from(
             r#"SELECT c.id, COALESCE(c.referencia,''), COALESCE(c.asunto,''),
                       COALESCE(c.importe_txt,''), COALESCE(c.estado,''),
                       COALESCE(c.data_publicacion,''), COALESCE(c.organismo,''),
-                      COALESCE(r.adxudicatario,''), COALESCE(r.importe_resolucion_txt,''),
+                      COALESCE(r.adxudicatarios,''), r.importe_total,
                       COALESCE(d.enlace_resolucion,'')
                FROM contracts c
                LEFT JOIN contract_detail d ON d.contract_id = c.id
-               LEFT JOIN contract_resolucion r ON r.contract_id = c.id
+               LEFT JOIN (
+                   SELECT contract_id,
+                          GROUP_CONCAT(DISTINCT NULLIF(TRIM(adxudicatario),'')) AS adxudicatarios,
+                          SUM(importe_resolucion_num) AS importe_total
+                   FROM contract_resolucion
+                   GROUP BY contract_id
+               ) r ON r.contract_id = c.id
                WHERE 1=1"#,
         );
         let mut args: Vec<String> = Vec::new();
@@ -332,7 +340,12 @@ impl Db {
             args.push(format!("%{}%", f.year.trim()));
         }
         if !f.adxudicatario.trim().is_empty() {
-            sql.push_str(" AND nrm(r.adxudicatario) LIKE ?");
+            // O contrato inclúese se ALGÚN dos seus lotes casa co adxudicatario;
+            // a fila segue amosando todos os adxudicatarios do contrato.
+            sql.push_str(
+                " AND EXISTS (SELECT 1 FROM contract_resolucion x \
+                   WHERE x.contract_id = c.id AND nrm(x.adxudicatario) LIKE ?)",
+            );
             args.push(format!("%{}%", normalize_search(&f.adxudicatario)));
         }
         sql.push_str(" ORDER BY c.data_publicacion DESC, c.id DESC LIMIT 5000");
@@ -341,6 +354,7 @@ impl Db {
         let params_dyn: Vec<&dyn rusqlite::ToSql> =
             args.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
         let rows = stmt.query_map(params_dyn.as_slice(), |row| {
+            let importe_total: Option<f64> = row.get(8)?;
             Ok(LocalRow {
                 id: row.get(0)?,
                 referencia: row.get(1)?,
@@ -350,7 +364,9 @@ impl Db {
                 publicacion: row.get(5)?,
                 organismo: row.get(6)?,
                 adxudicatario: row.get(7)?,
-                importe_resolucion_txt: row.get(8)?,
+                importe_resolucion_txt: importe_total
+                    .map(crate::model::format_importe)
+                    .unwrap_or_default(),
                 enlace_resolucion: row.get(9)?,
             })
         })?;
@@ -527,6 +543,64 @@ mod tests {
             .expect("a consulta non debe fallar con adxudicatario NULL");
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].id, "1");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    // Un contrato con varios lotes debe aparecer UNHA soa vez na consulta local;
+    // os adxudicatarios agréganse e os importes súmanse.
+    #[test]
+    fn contrato_con_varios_lotes_aparece_unha_vez() {
+        let path = std::env::temp_dir().join("congal_test_lotes.sqlite");
+        let _ = std::fs::remove_file(&path);
+        let mut db = Db::open(&path).expect("db");
+
+        db.upsert_summaries(
+            &[summary("10", "obra con lotes", "Concello", "Formalizado", "01/02/2025")],
+            "agora",
+        )
+        .expect("upsert summaries");
+
+        let detail = ContractDetail {
+            contract_id: "10".into(),
+            ..Default::default()
+        };
+        let res = [
+            Resolucion {
+                lote: "1".into(),
+                adxudicatario: "Empresa A SL".into(),
+                importe_num: Some(1000.0),
+                importe_txt: "1.000,00 €".into(),
+                ..Default::default()
+            },
+            Resolucion {
+                lote: "2".into(),
+                adxudicatario: "Empresa B SL".into(),
+                importe_num: Some(2500.5),
+                importe_txt: "2.500,50 €".into(),
+                ..Default::default()
+            },
+        ];
+        db.upsert_detail(&detail, &res).expect("upsert detail");
+
+        let rows = db.query_local(&LocalFilters::default()).expect("query");
+        assert_eq!(rows.len(), 1, "o contrato debe aparecer unha soa vez");
+        let r = &rows[0];
+        assert_eq!(r.id, "10");
+        // Os dous adxudicatarios distintos aparecen agregados.
+        assert!(r.adxudicatario.contains("Empresa A SL"));
+        assert!(r.adxudicatario.contains("Empresa B SL"));
+        // Importe total = suma dos lotes, formatado en galego.
+        assert_eq!(r.importe_resolucion_txt, "3.500,50 €");
+
+        // Filtrar por un adxudicatario segue a devolver o contrato (unha vez).
+        let f = LocalFilters {
+            adxudicatario: "empresa b".into(),
+            ..Default::default()
+        };
+        let rows = db.query_local(&f).expect("query filtrada");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, "10");
 
         let _ = std::fs::remove_file(&path);
     }

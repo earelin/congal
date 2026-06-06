@@ -18,7 +18,8 @@ const CABECEIRAS: [&str; 10] = [
     "Enlace resolución",
 ];
 
-/// Exporta as filas dadas a un ficheiro .ods (unha fila por contrato/lote).
+/// Exporta as filas dadas a un ficheiro .ods (unha fila por contrato, cos
+/// adxudicatarios agregados e o importe total adxudicado).
 pub fn export_ods(path: &Path, rows: &[LocalRow]) -> Result<()> {
     let mut wb = WorkBook::new_empty();
     let mut sheet = Sheet::new("Contratos");

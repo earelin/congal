@@ -35,6 +35,13 @@ pub fn search(client: &Client, filters: &Filters) -> Result<Vec<ContractSummary>
 
     let mut rows = parse_results(&html)?;
 
+    // O servidor pode devolver o mesmo contrato máis dunha vez (p.ex. unha
+    // entrada por lote). Como `id` identifica univocamente cada contrato,
+    // eliminamos os duplicados conservando a primeira aparición; así o reconto
+    // de atopados e a descarga de detalle non se repiten.
+    let mut vistos = std::collections::HashSet::new();
+    rows.retain(|r| vistos.insert(r.id.clone()));
+
     if !filters.asunto.trim().is_empty() {
         let q = filters.asunto.to_lowercase();
         rows.retain(|r| {
@@ -81,5 +88,23 @@ mod tests {
     fn ressearch_baleiro_devolve_lista_baleira() {
         let html = r#"<input id="resSearch" value="">"#;
         assert!(parse_results(html).unwrap().is_empty());
+    }
+
+    // O id identifica univocamente cada contrato: se o servidor repite un id
+    // (p.ex. unha entrada por lote), `search` debe deixar unha soa fila.
+    #[test]
+    fn search_elimina_contratos_repetidos_polo_id() {
+        let html = r#"<input id="resSearch" value="[{&quot;id&quot;:&quot;1&quot;,&quot;asunto&quot;:&quot;Lote A&quot;},{&quot;id&quot;:&quot;1&quot;,&quot;asunto&quot;:&quot;Lote B&quot;},{&quot;id&quot;:&quot;2&quot;,&quot;asunto&quot;:&quot;Outro&quot;}]">"#;
+        let mut rows = parse_results(html).unwrap();
+        assert_eq!(rows.len(), 3);
+
+        // Mesma deduplicación que aplica `search` tras analizar o JSON.
+        let mut vistos = std::collections::HashSet::new();
+        rows.retain(|r| vistos.insert(r.id.clone()));
+
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].id, "1");
+        assert_eq!(rows[0].asunto, "Lote A"); // consérvase a primeira aparición
+        assert_eq!(rows[1].id, "2");
     }
 }

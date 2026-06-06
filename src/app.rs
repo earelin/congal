@@ -37,7 +37,11 @@ pub struct App {
     local_options: LocalOptions,
     rows: Vec<LocalRow>,
     need_query: bool,
+    /// Id do contrato seleccionado (resáltase na táboa e ábrese o seu diálogo).
     selected: Option<String>,
+    /// Fila de resumo do contrato seleccionado (info do listado).
+    selected_row: Option<LocalRow>,
+    /// Detalle descargado do contrato seleccionado, se o hai.
     selected_detail: Option<(ContractDetail, Vec<Resolucion>)>,
 }
 
@@ -75,6 +79,7 @@ impl App {
             rows: Vec::new(),
             need_query: true,
             selected: None,
+            selected_row: None,
             selected_detail: None,
         };
         app.refresh_local();
@@ -133,9 +138,16 @@ impl App {
         }
     }
 
-    fn select_contract(&mut self, id: String) {
-        self.selected_detail = self.db.load_detail(&id).ok().flatten();
-        self.selected = Some(id);
+    fn select_contract(&mut self, row: LocalRow) {
+        self.selected_detail = self.db.load_detail(&row.id).ok().flatten();
+        self.selected = Some(row.id.clone());
+        self.selected_row = Some(row);
+    }
+
+    fn close_detail(&mut self) {
+        self.selected = None;
+        self.selected_row = None;
+        self.selected_detail = None;
     }
 }
 
@@ -471,21 +483,25 @@ impl App {
                 );
             });
 
-        if self.selected.is_some() {
-            self.detail_panel(ui);
-        }
-
         egui::CentralPanel::default().show_inside(ui, |ui| {
-            self.results_table(ui);
+            if self.selected.is_some() {
+                self.detail_view(ui);
+            } else {
+                self.results_table(ui);
+            }
         });
     }
 
     fn results_table(&mut self, ui: &mut egui::Ui) {
-        let mut clicked: Option<String> = None;
+        let mut clicked: Option<LocalRow> = None;
         let selected = self.selected.clone();
+        // Texto non seleccionable nas celas: así o cursor non entra en modo
+        // inserción de texto e o clic chega á fila enteira (sense ::click).
+        ui.style_mut().interaction.selectable_labels = false;
         TableBuilder::new(ui)
             .striped(true)
             .resizable(true)
+            .sense(egui::Sense::click())
             .cell_layout(Layout::left_to_right(Align::Center))
             .column(Column::initial(70.0).at_least(56.0))
             .column(Column::initial(90.0))
@@ -541,61 +557,92 @@ impl App {
                         row.col(|ui| {
                             ui.label(&r.importe_resolucion_txt);
                         });
-                        if row.response().clicked() {
-                            clicked = Some(r.id.clone());
+                        let resp = row.response();
+                        resp.clone().on_hover_cursor(egui::CursorIcon::PointingHand);
+                        if resp.clicked() {
+                            clicked = Some(r.clone());
                         }
                     });
                 }
             });
-        if let Some(id) = clicked {
-            self.select_contract(id);
+        if let Some(row) = clicked {
+            self.select_contract(row);
         }
     }
 
-    fn detail_panel(&mut self, ui: &mut egui::Ui) {
-        egui::Panel::right("detalle")
-            .resizable(true)
-            .default_size(380.0)
-            .show_inside(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.heading("Detalle");
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui.button("✕").clicked() {
-                            self.selected = None;
-                            self.selected_detail = None;
-                        }
-                    });
-                });
-                ui.separator();
-                let Some((d, resolucions)) = &self.selected_detail else {
-                    ui.label("Sen detalle descargado para este contrato.");
-                    return;
-                };
-                ScrollArea::vertical().show(ui, |ui| {
-                    field(ui, "ID", &d.contract_id);
-                    field(ui, "Referencia", &d.referencia);
-                    field(ui, "Obxecto", &d.obxecto);
-                    field(ui, "Tipo de contrato", &d.tipo_contrato);
-                    field(ui, "Tipo de procedemento", &d.tipo_procedemento);
-                    field(ui, "Tipo de tramitación", &d.tipo_tramitacion);
-                    field(ui, "Orzamento base", &d.orzamento_base);
-                    field(ui, "Valor estimado", &d.valor_estimado);
-                    field(ui, "Nº lotes", &d.num_lotes);
-                    field(ui, "Sistema de contratación", &d.sistema_contratacion);
-                    field(ui, "Data de difusión", &d.data_difusion);
-                    field(ui, "Observacións", &d.observacions);
+    /// Vista de detalle do contrato seleccionado. Ocupa o espazo da táboa ata
+    /// que se volve á lista co botón "← Volver".
+    fn detail_view(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            if ui.button("← Volver á lista").clicked() {
+                self.close_detail();
+            }
+            ui.add_space(8.0);
+            ui.heading("Detalle do contrato");
+        });
+        ui.add_space(6.0);
+        ui.separator();
+        ui.add_space(6.0);
+
+        // Se xa se pechou neste fotograma evitamos pintar o resto.
+        if self.selected.is_none() {
+            return;
+        }
+
+        ScrollArea::vertical().show(ui, |ui| {
+            // Resumo do listado (sempre dispoñible, mesmo sen detalle descargado).
+            if let Some(r) = &self.selected_row {
+                if !r.asunto.trim().is_empty() {
+                    ui.label(RichText::new(&r.asunto).strong().size(16.0));
+                    ui.add_space(8.0);
+                }
+                kv(ui, "ID", &r.id);
+                kv(ui, "Referencia", &r.referencia);
+                kv(ui, "Data de publicación", &r.publicacion);
+                kv(ui, "Estado", &r.estado);
+                kv(ui, "Importe", &r.importe_txt);
+                kv(ui, "Organismo", &r.organismo);
+            }
+
+            match &self.selected_detail {
+                None => {
+                    ui.add_space(10.0);
+                    ui.label(
+                        RichText::new("Sen detalle descargado para este contrato.")
+                            .italics()
+                            .color(Color32::GRAY),
+                    );
+                }
+                Some((d, resolucions)) => {
+                    ui.add_space(12.0);
+                    ui.separator();
+                    ui.add_space(6.0);
+                    ui.label(RichText::new("Datos do contrato").strong());
+                    ui.add_space(6.0);
+                    kv(ui, "Obxecto", &d.obxecto);
+                    kv(ui, "Tipo de contrato", &d.tipo_contrato);
+                    kv(ui, "Tipo de procedemento", &d.tipo_procedemento);
+                    kv(ui, "Tipo de tramitación", &d.tipo_tramitacion);
+                    kv(ui, "Orzamento base", &d.orzamento_base);
+                    kv(ui, "Valor estimado", &d.valor_estimado);
+                    kv(ui, "Nº lotes", &d.num_lotes);
+                    kv(ui, "Sistema de contratación", &d.sistema_contratacion);
+                    kv(ui, "Data de difusión", &d.data_difusion);
+                    kv(ui, "Observacións", &d.observacions);
 
                     if !d.enlace_resolucion.is_empty() {
-                        ui.add_space(4.0);
+                        ui.add_space(8.0);
                         ui.hyperlink_to("🔗 Abrir resolución na web", &d.enlace_resolucion);
                     }
 
                     if !resolucions.is_empty() {
-                        ui.add_space(10.0);
+                        ui.add_space(12.0);
                         ui.label(RichText::new("Resolucións / adxudicacións").strong());
-                        for (i, r) in resolucions.iter().enumerate() {
-                            ui.add_space(4.0);
+                        for r in resolucions {
+                            ui.add_space(6.0);
                             ui.group(|ui| {
+                                ui.set_width(ui.available_width());
                                 ui.label(
                                     RichText::new(format!(
                                         "Lote {} · {}",
@@ -608,21 +655,21 @@ impl App {
                                 field(ui, "Importe", &r.importe_txt);
                                 field(ui, "Data difusión", &r.data_difusion);
                                 field(ui, "Prazo execución", &r.prazo_execucion);
-                                let _ = i;
                             });
                         }
                     }
 
                     if !d.extra.is_empty() {
-                        ui.add_space(10.0);
+                        ui.add_space(12.0);
                         ui.collapsing("Outros campos", |ui| {
                             for (k, v) in &d.extra {
-                                field(ui, k, v);
+                                kv(ui, k, v);
                             }
                         });
                     }
-                });
-            });
+                }
+            }
+        });
     }
 }
 
@@ -633,6 +680,26 @@ fn text_input(ui: &mut egui::Ui, text: &mut String) -> egui::Response {
             .margin(egui::Margin::symmetric(8, 6))
             .desired_width(f32::INFINITY),
     )
+}
+
+/// Fila «etiqueta + valor» para a vista de detalle. A etiqueta ocupa unha
+/// columna fixa á esquerda e o valor axústase a varias liñas (wrap) para que o
+/// texto longo non se saia do marco da vista. Omítese se o valor está baleiro.
+fn kv(ui: &mut egui::Ui, label: &str, value: &str) {
+    if value.trim().is_empty() || value == "_" {
+        return;
+    }
+    ui.horizontal_top(|ui| {
+        ui.allocate_ui_with_layout(
+            egui::vec2(180.0, 0.0),
+            Layout::left_to_right(Align::TOP),
+            |ui| ui.label(RichText::new(label).strong()),
+        );
+        // `wrap()` fai que o valor se reparta en varias liñas dentro do ancho
+        // restante en lugar de desbordar a vista.
+        ui.add(egui::Label::new(value).wrap());
+    });
+    ui.add_space(4.0);
 }
 
 /// Mostra unha etiqueta + valor se o valor non está baleiro.
