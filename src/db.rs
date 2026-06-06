@@ -83,12 +83,20 @@ impl Db {
                 nome          TEXT
             );
 
+            -- Estados do contrato, normalizados nunha táboa propia. O servidor só
+            -- devolve o texto do estado (non un código), así que `cod_estado` é
+            -- unha clave subrogada que se asigna soa ao inserir un nome novo.
+            CREATE TABLE IF NOT EXISTS estados (
+                cod_estado INTEGER PRIMARY KEY,
+                nome       TEXT NOT NULL UNIQUE
+            );
+
             CREATE TABLE IF NOT EXISTS contracts (
                 id                TEXT PRIMARY KEY,
                 referencia        TEXT,
                 asunto            TEXT,
                 importe_num       REAL,
-                estado            TEXT,
+                cod_estado        INTEGER REFERENCES estados(cod_estado),
                 data_publicacion  TEXT,   -- ISO 8601 'YYYY-MM-DD'
                 cod_organismo     TEXT REFERENCES organismos(cod_organismo),
                 detalle_descargado INTEGER NOT NULL DEFAULT 0,
@@ -129,7 +137,7 @@ impl Db {
             );
 
             CREATE INDEX IF NOT EXISTS idx_contracts_org   ON contracts(cod_organismo);
-            CREATE INDEX IF NOT EXISTS idx_contracts_estado ON contracts(estado);
+            CREATE INDEX IF NOT EXISTS idx_contracts_estado ON contracts(cod_estado);
             CREATE INDEX IF NOT EXISTS idx_contracts_data  ON contracts(data_publicacion);
             CREATE INDEX IF NOT EXISTS idx_res_contract    ON contract_resolucion(contract_id);
             CREATE INDEX IF NOT EXISTS idx_res_adx         ON contract_resolucion(adxudicatario);
@@ -148,11 +156,14 @@ impl Db {
         let r = self
             .conn
             .query_row(
-                "SELECT estado FROM contracts WHERE id = ?1",
+                "SELECT e.nome FROM contracts c
+                 LEFT JOIN estados e ON e.cod_estado = c.cod_estado
+                 WHERE c.id = ?1",
                 params![id],
-                |row| row.get::<_, String>(0),
+                |row| row.get::<_, Option<String>>(0),
             )
-            .ok();
+            .ok()
+            .flatten();
         Ok(r)
     }
 
@@ -171,16 +182,30 @@ impl Db {
                 }
             }
 
+            // Despois os estados (a FK de `contracts` apunta a esta táboa). O
+            // `cod_estado` asígnase soa; aquí só garantimos que cada nome exista.
+            let mut est_stmt =
+                tx.prepare(r#"INSERT OR IGNORE INTO estados (nome) VALUES (?1)"#)?;
+            for r in rows {
+                if !r.estado.trim().is_empty() {
+                    est_stmt.execute(params![r.estado.trim()])?;
+                }
+            }
+
+            // `cod_estado` resólvese por subconsulta sobre `estados` (NULL se o
+            // estado vén baleiro: a subconsulta non casa con ningunha fila).
             let mut stmt = tx.prepare(
                 r#"INSERT INTO contracts
-                    (id, referencia, asunto, importe_num, estado,
+                    (id, referencia, asunto, importe_num, cod_estado,
                      data_publicacion, cod_organismo, actualizado_en)
-                   VALUES (?1,?2,?3,?4,?5,?6,?7,?8)
+                   VALUES (?1,?2,?3,?4,
+                     (SELECT cod_estado FROM estados WHERE nome=?5),
+                     ?6,?7,?8)
                    ON CONFLICT(id) DO UPDATE SET
                      referencia=excluded.referencia,
                      asunto=excluded.asunto,
                      importe_num=excluded.importe_num,
-                     estado=excluded.estado,
+                     cod_estado=excluded.cod_estado,
                      data_publicacion=excluded.data_publicacion,
                      cod_organismo=excluded.cod_organismo,
                      actualizado_en=excluded.actualizado_en"#,
@@ -193,7 +218,7 @@ impl Db {
                     r.referencia,
                     r.asunto,
                     parse_importe(&r.importe),
-                    r.estado,
+                    r.estado.trim(),
                     parse_data(&r.publicacion),
                     cod,
                     now,
@@ -319,12 +344,13 @@ impl Db {
     pub fn query_local(&self, f: &LocalFilters) -> Result<Vec<LocalRow>> {
         let mut sql = String::from(
             r#"SELECT c.id, COALESCE(c.referencia,''), COALESCE(c.asunto,''),
-                      c.importe_num, COALESCE(c.estado,''),
+                      c.importe_num, COALESCE(e.nome,''),
                       COALESCE(c.data_publicacion,''), COALESCE(o.nome,''),
                       COALESCE(r.adxudicatarios,''), r.importe_total,
                       COALESCE(d.enlace_resolucion,'')
                FROM contracts c
                LEFT JOIN organismos o ON o.cod_organismo = c.cod_organismo
+               LEFT JOIN estados e ON e.cod_estado = c.cod_estado
                LEFT JOIN contract_detail d ON d.contract_id = c.id
                LEFT JOIN (
                    SELECT contract_id,
@@ -347,7 +373,7 @@ impl Db {
             args.push(format!("%{}%", normalize_search(&f.organismo)));
         }
         if !f.estado.trim().is_empty() {
-            sql.push_str(" AND nrm(c.estado) LIKE ?");
+            sql.push_str(" AND nrm(e.nome) LIKE ?");
             args.push(format!("%{}%", normalize_search(&f.estado)));
         }
         if !f.year.trim().is_empty() {
@@ -469,8 +495,8 @@ impl Db {
              WHERE TRIM(COALESCE(nome,'')) <> '' ORDER BY nome COLLATE NOCASE",
         )?;
         let estados = self.distinct(
-            "SELECT DISTINCT estado FROM contracts \
-             WHERE TRIM(COALESCE(estado,'')) <> '' ORDER BY estado COLLATE NOCASE",
+            "SELECT nome FROM estados \
+             WHERE TRIM(COALESCE(nome,'')) <> '' ORDER BY nome COLLATE NOCASE",
         )?;
         let datas = self.distinct(
             "SELECT DISTINCT data_publicacion FROM contracts \
@@ -601,6 +627,55 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(db.query_local(&f).expect("query org").len(), 1);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    // Tras normalizar o estado: gárdase nunha táboa propia (un `cod_estado` por
+    // nome distinto), o nome cárgase vía JOIN, aparece nas opcións locais e o
+    // filtro por estado segue a funcionar. `estado_previo` segue devolvendo o
+    // texto (do que depende a sincronización incremental).
+    #[test]
+    fn normalizacion_estado() {
+        let path = std::env::temp_dir().join("congal_test_estado.sqlite");
+        let _ = std::fs::remove_file(&path);
+        let mut db = Db::open(&path).expect("db");
+
+        db.upsert_summaries(
+            &[
+                summary("1", "obra", "Concello", "Formalizado", "01/02/2025"),
+                summary("2", "servizo", "Deputación", "Pendente de adxudicar", "03/04/2024"),
+                // Mesmo estado que o 1: comparte `cod_estado`, non duplica fila.
+                summary("3", "subministración", "Concello", "Formalizado", "05/06/2025"),
+            ],
+            "agora",
+        )
+        .expect("upsert summaries");
+
+        // Só dous estados distintos quedan na táboa `estados`.
+        let opts = db.local_options().expect("options");
+        assert_eq!(
+            opts.estados,
+            vec!["Formalizado".to_string(), "Pendente de adxudicar".to_string()]
+        );
+
+        // O nome do estado cárgase vía JOIN na consulta local.
+        let rows = db.query_local(&LocalFilters::default()).expect("query");
+        let r1 = rows.iter().find(|r| r.id == "1").expect("fila 1");
+        assert_eq!(r1.estado, "Formalizado");
+
+        // `estado_previo` devolve o texto (úsao a sync para `is_estado_terminal`).
+        assert_eq!(db.estado_previo("2").expect("previo").as_deref(), Some("Pendente de adxudicar"));
+        assert_eq!(db.estado_previo("descoñecido").expect("previo"), None);
+
+        // Filtro por estado, insensible a maiúsculas/acentos.
+        let f = LocalFilters {
+            estado: "pendente".into(),
+            ..Default::default()
+        };
+        let filtradas = db.query_local(&f).expect("query estado");
+        assert_eq!(filtradas.len(), 1);
+        assert_eq!(filtradas[0].id, "2");
 
         let _ = std::fs::remove_file(&path);
     }

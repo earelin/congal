@@ -59,9 +59,12 @@ The data flow is: **GUI → Worker thread → scraper/sync/db → events back to
   - `options.rs` — parses the filter dropdowns from `portada.jsp` into `FilterOptions`.
 
 - **`db.rs`** — SQLite schema and queries (`Db`). Tables: `contracts` (listing, normalised:
-  only `importe_num`, dates stored as ISO 8601 text, `cod_organismo` FK), `organismos`
-  (`cod_organismo` → `nome`, the organism name lives here, loaded via JOIN), `contract_detail`
-  (1:1), `contract_resolucion` (1:N per lot), plus a `meta` key/value table (e.g. `ultima_sync`).
+  only `importe_num`, dates stored as ISO 8601 text, `cod_organismo` + `cod_estado` FKs),
+  `organismos` (`cod_organismo` → `nome`, the organism name lives here, loaded via JOIN),
+  `estados` (`cod_estado` → `nome`; the server only sends the estado text, so `cod_estado`
+  is a surrogate key auto-assigned on first insert of each name; loaded via JOIN),
+  `contract_detail` (1:1), `contract_resolucion` (1:N per lot), plus a `meta` key/value
+  table (e.g. `ultima_sync`).
   WAL mode, foreign keys on. The project is a **prototype**: no schema versioning/migration —
   delete the local `.sqlite` to apply schema changes. `upsert_*` are the write paths;
   `query_local` powers the offline Local tab (one row per contract, lotes aggregated;
