@@ -1,4 +1,4 @@
-# congal
+# Congal
 
 Aplicación de escritorio (Windows / macOS / Linux) escrita en **Rust** para extraer,
 almacenar e exportar a información de contratos públicos da Xunta de Galicia desde
@@ -7,14 +7,15 @@ almacenar e exportar a información de contratos públicos da Xunta de Galicia d
 ## Características
 
 - **Interface gráfica** (egui) con estilo inspirado nas *Apple Human Interface Guidelines*
-  (fonte Inter, modo claro/escuro automático, acento azul sistema).
-- Dúas áreas de traballo:
-  - **Scraper / Sincronización**: busca cos mesmos filtros ca a web (estado, ano, órgano de
-    contratación, busca textual, tipo de contrato / procedemento / tramitación, sistema,
-    materia CPV) e descarga o detalle de cada contrato.
-  - **Traballo local**: busca sobre a base de datos sen rede, incluída a **busca por
-    adxudicatario**, e exportación a folla de cálculo.
-- **Sincronización incremental**: os contratos xa resoltos non se volven descargar; só se
+  (fonte Inter, iconas Lucide, modo claro/escuro automático, acento azul sistema).
+- **Pantalla principal**: listado dos contratos xa importados, con busca local sen rede
+  (texto, **adxudicatario**, organismo, estado, ano) e panel de detalle por contrato.
+  As buscas son insensibles a maiúsculas e a acentos.
+- **Importación de datos** nun diálogo modal cos mesmos filtros ca a web (estado, ano,
+  órgano de contratación, busca textual, tipo de contrato / procedemento / tramitación,
+  sistema, materia CPV); o ano preséntase nun despregable co ano actual preseleccionado.
+  Un segundo modal mostra a barra de progreso da importación, que se pode cancelar.
+- **Importación incremental**: os contratos xa resoltos non se volven descargar; só se
   actualizan os que seguían en proceso e os novos (mantense o histórico).
 - Almacenamento local en **SQLite**.
 - De cada contrato gárdanse os datos do listado, o detalle completo e os **datos da
