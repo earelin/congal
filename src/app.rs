@@ -489,11 +489,18 @@ impl App {
             .cell_layout(Layout::left_to_right(Align::Center))
             .column(Column::initial(70.0).at_least(56.0))
             .column(Column::initial(90.0))
-            .column(Column::remainder().at_least(180.0).clip(true))
+            // Columnas de texto: reparten o espazo sobrante a partes iguais, así ao
+            // agrandar a ventá medran as tres e amosan máis información. O `at_least`
+            // fixa a proporción mínima (Obxecto algo máis ancho que as outras).
+            //
+            // Teñen que ser `.resizable(false)`: en egui_extras unha columna `remainder`
+            // só segue ocupando o espazo sobrante en cada fotograma se NON é redimensionable;
+            // se o é, queda fixada co ancho do primeiro fotograma e non medra ao agrandar a ventá.
+            .column(Column::remainder().at_least(200.0).clip(true).resizable(false))
             .column(Column::initial(110.0))
             .column(Column::initial(130.0))
-            .column(Column::initial(180.0).clip(true))
-            .column(Column::initial(180.0).clip(true))
+            .column(Column::remainder().at_least(150.0).clip(true).resizable(false))
+            .column(Column::remainder().at_least(150.0).clip(true).resizable(false))
             .column(Column::initial(120.0))
             .header(24.0, |mut h| {
                 for t in [
