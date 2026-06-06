@@ -18,6 +18,8 @@ pub enum Command {
         path: PathBuf,
         filters: LocalFilters,
     },
+    /// Remata o bucle do fío para pechar limpamente a conexión SQLite.
+    Shutdown,
 }
 
 /// Eventos que o fío traballador devolve á interface.
@@ -38,6 +40,8 @@ pub struct Worker {
     pub tx: Sender<Command>,
     pub rx: Receiver<Event>,
     pub cancel: Arc<AtomicBool>,
+    /// Manexador do fío para poder esperar polo seu remate ao pechar.
+    handle: Option<thread::JoinHandle<()>>,
 }
 
 impl Worker {
@@ -47,7 +51,7 @@ impl Worker {
         let cancel = Arc::new(AtomicBool::new(false));
         let cancel_thread = cancel.clone();
 
-        thread::spawn(move || {
+        let handle = thread::spawn(move || {
             let client = match Client::new() {
                 Ok(c) => c,
                 Err(e) => {
@@ -66,6 +70,7 @@ impl Worker {
             while let Ok(cmd) = rx_cmd.recv() {
                 cancel_thread.store(false, Ordering::Relaxed);
                 match cmd {
+                    Command::Shutdown => break,
                     Command::LoadOptions => match scraper::load_filter_options(&client) {
                         Ok(o) => {
                             let _ = tx_evt.send(Event::Options(o));
@@ -101,12 +106,15 @@ impl Worker {
                 }
                 ctx.request_repaint();
             }
+            // Ao saír do bucle (Shutdown ou canle pechada) cae `db`, o que pecha
+            // a conexión SQLite limpamente e fai o checkpoint do WAL.
         });
 
         Worker {
             tx: tx_cmd,
             rx: rx_evt,
             cancel,
+            handle: Some(handle),
         }
     }
 
@@ -116,5 +124,22 @@ impl Worker {
 
     pub fn request_cancel(&self) {
         self.cancel.store(true, Ordering::Relaxed);
+    }
+
+    /// Detén calquera operación en curso e espera a que o fío remate, garantindo
+    /// que a súa conexión SQLite se pecha antes de saír da aplicación.
+    pub fn shutdown(&mut self) {
+        // Aborta unha sincronización longa que estea en curso.
+        self.cancel.store(true, Ordering::Relaxed);
+        let _ = self.tx.send(Command::Shutdown);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+impl Drop for Worker {
+    fn drop(&mut self) {
+        self.shutdown();
     }
 }

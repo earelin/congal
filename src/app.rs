@@ -152,6 +152,14 @@ impl eframe::App for App {
             self.progress_dialog(&ctx);
         }
     }
+
+    /// Chámase unha soa vez ao pechar (tamén ao pechar a ventá desde o sistema).
+    /// Pecha primeiro o fío traballador (e a súa conexión SQLite) e logo fai o
+    /// checkpoint da conexión principal para non deixar conexións sen pechar.
+    fn on_exit(&mut self) {
+        self.worker.shutdown();
+        self.db.checkpoint();
+    }
 }
 
 impl App {

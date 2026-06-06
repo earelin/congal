@@ -65,6 +65,14 @@ impl Db {
         Ok(db)
     }
 
+    /// Volca o WAL ao ficheiro principal e trúncao. Útil ao pechar a aplicación
+    /// para non deixar atrás os ficheiros `-wal`/`-shm` cheos.
+    pub fn checkpoint(&self) {
+        let _ = self
+            .conn
+            .pragma_update(None, "wal_checkpoint", "TRUNCATE");
+    }
+
     fn init_schema(&self) -> Result<()> {
         self.conn.execute_batch(
             r#"
