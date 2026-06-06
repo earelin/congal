@@ -1,0 +1,2796 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+        
+    
+        
+<!DOCTYPE html>
+<html lang="gl">
+    <head>
+        <!--Server:server-dae-pcg-1b-->
+        <title>Detalle procedemento:&nbsp;824580 - Contratos P&uacute;blicos de Galicia</title>
+        <meta http-equiv="Content-Type" content="text/html;charset=ISO-8859-1"> 
+        <meta http-equiv="X-UA-Compatible" content="IE=edge">
+        <meta name="viewport" content="width=device-width, initial-scale=1">        
+        <meta name="author" content="Xunta de Galicia">
+        <meta name="keywords" content="contratacion,p&uacute;blica,xunta,galicia,procedemento"/>
+        <meta name="description" content="Detalle do procedemento &nbsp;824580 do portal Contratos P&uacute;blicos de Galicia"/>
+        <meta name="apple-itunes-app" content="app-id=940006581"/>
+        <meta name="google-play-app" content="app-id=es.xunta.pcgmobil"/>        
+        <link rel="icon" href="img/iconos/ico.ico"> 
+        <meta name="theme-color" content="#0371B3"/>
+        
+        <!-- Bootstrap core JavaScript -->
+        <script type="text/javascript" src="js/jquery.min.js?v=20260428144224577"></script>
+        <script type="text/javascript" src="js/bootstrap.min.js?v=20260428144224577"></script>
+        <script type="text/javascript" src="js/js-spc/acciones.min.js?v=20260428144224577"></script>
+        <script type="text/javascript" src="js/js-spc/consultaConcurso.js?v=20260428144224577"></script>        
+        <script type="text/javascript" src="js/js-comun/xUtiles.min.js?v=20260428144224577"></script>
+        <script type="text/javascript" src="js/js-comun/Base64.js?v=20260428144224577"></script>
+
+        <!-- IE10 viewport hack for Surface/desktop Windows 8 bug -->
+        <script type="text/javascript" src="js/ie10-viewport-bug-workaround.js?v=20260428144224577"></script>
+
+        <!-- Bootstrap core CSS -->
+        <link href="css/bootstrap.min.css?v=20260428144224577" rel="stylesheet">
+
+        <!-- IE10 viewport hack for Surface/desktop Windows 8 bug -->
+        <link href="css/ie10-viewport-bug-workaround.css?v=20260428144224577" rel="stylesheet">
+
+        <!-- CSS Maqueta -->
+        <link href="css/estilo.min.css?v=20260428144224577" rel="stylesheet">
+        <link href="css/consulta.css?v=20260428144224577" rel="stylesheet">
+                
+        
+        <script type="text/javascript">
+
+            var il8n_inscripcion_correcta1   = 'Vostede inscribiuse no día';
+            var il8n_inscripcion_correcta2   = 'co enderezo';
+            var il8n_inscripcion_correcta3   = 'correctamente para a asistencia á mesa';
+            var il8n_inscripcion_correcta4   = 'do procedemento';
+            var il8n_inscripcion_correcta5   = 'Por favor, revise o correo electrónico, incluída a bandexa de spam e se non recibe confirmación volva a inscribirse por si algún dato non é correcto.';
+
+
+        </script>
+            
+            <!-- Google Tag Manager -->
+            <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+            new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+            j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+            'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+            })(window,document,'script','dataLayer','GTM-57WH892');</script>
+            <!-- End Google Tag Manager -->
+           
+         
+                                  
+                                            
+        <!-- HTML5 shim and Respond.js for IE8 support of HTML5 elements and media queries -->
+        <!--[if lt IE 9]>
+          <script src="https://oss.maxcdn.com/html5shiv/3.7.3/html5shiv.min.js"></script>
+          <script src="https://oss.maxcdn.com/respond/1.4.2/respond.min.js"></script>
+        <![endif]-->
+        
+        <!-- RECAPTCHA-->    
+        
+        
+        
+            <script src='https://www.google.com/recaptcha/api.js?render=6LdnJXwUAAAAAN78mPUQ3i6nwmvbHh0WPR9mcPGW'></script>
+            <script type="text/javascript" src="js/recaptchav3.js?v=20260428144224577"></script>        
+            <script>verify_dummy_action('6LdnJXwUAAAAAN78mPUQ3i6nwmvbHh0WPR9mcPGW', 'concurso');</script> 
+        
+    </head>
+    <body onload="loading()">
+         
+        <!-- Google Tag Manager (noscript) -->
+        <noscript><iframe title="Google TagManager" src="https://www.googletagmanager.com/ns.html?id=GTM-57WH892" 
+        height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+        <!-- End Google Tag Manager (noscript) -->
+
+        <script>
+            
+            $(document).ready(function(){
+                var inscripcionMesaVirtual = '';
+                
+                if(inscripcionMesaVirtual == 'true'){
+
+                    var errorInscripcion = '';
+                    var existeInscripcion = '';
+                    
+                    if(existeInscripcion == 'true'){
+                        cargaPestañaMesas();
+                    }                    
+                    if(errorInscripcion == 'true'){
+                        mesaVirtualERROR();
+                        console.log("error");
+                    }else{
+                        mesaVirtualOK("");
+                        console.log("ok");
+                    }
+                }
+            });
+            
+            var vload;
+            
+            function loading() {
+                vload = setTimeout(showPage, 100);
+            }
+
+            function showPage() {
+                $("#loader").addClass("hidden");
+                $("#wrapper").removeClass("hidden");
+            }
+            
+            
+            
+            function cargaPestañaMesas(){
+                // Declare all variables
+                 var i, tablinks;
+                 
+                 
+                tablinks = document.getElementsByClassName("titulo");
+                for (i = 0; i < tablinks.length; i++) {
+                  tablinks[i].className = tablinks[i].className.replace("active", "");
+                }
+                
+                tablinks = document.getElementsByClassName("tab-pane ");
+                for (i = 0; i < tablinks.length; i++) {
+                  tablinks[i].className = tablinks[i].className.replace("in active", "");
+                }
+                
+                document.getElementById("apertura-concurso").className += " active";  
+                document.getElementById("consulta-mesas").className += " in active";
+                
+            }
+        </script>
+        
+        <div id="loader"></div> 
+        
+        <div id="wrapper" class="animate-consulta hidden">            
+            
+            <main>
+                
+                <div>
+                    <form id="formDescargaG" name="formulario" action="./descargaG" method="post">
+                        <input type="hidden" name="T"  id="T"  value=""/>
+                        <input type="hidden" name="F"  id="F"  value=""/>
+                        <input type="hidden" name="V"  id="V"  value=""/>
+                        <input type="hidden" name="J"  id="J"  value=""/>
+                        <input type="hidden" name="L"  id="L"  value=""/>
+                        <input type="hidden" name="D"  id="D"  value=""/>
+                        <input type="hidden" name="K2" id="K2"  value=""/>
+                        <input type="hidden" name="DC" id="DC"  value=""/>
+                        <input type="hidden" name="DE" id="DE"  value=""/>
+                        <input type="hidden" name="ID" id="IDcontentG" value=""/>
+                        <input type="hidden" name="N"  id="NcontentG"  value=""/>
+                        <input type="hidden" name="M"  id="M" value=""/>        
+                        
+                        <input type="hidden" id="recaptchav3active" name="recaptchav3active" 
+                                       value="true" 
+                                       data-publickey="6LdnJXwUAAAAAN78mPUQ3i6nwmvbHh0WPR9mcPGW" 
+                                       data-action="concursofichero" />
+                        
+                        
+                            <input type="hidden" id="g-recaptcha-response" name="g-recaptcha-response" />
+                        
+                    </form>                
+                </div>
+            
+                
+
+
+
+
+
+
+
+
+<header class="main-header no-padding no-margin container-fluid">
+    <div class="hidden-xs">
+        <!-- hidden-xs: para monitores -->
+        <div class="page-max-width">
+            <div class="row no-gutter no-margin ">	      
+                <div class="col-sm-12 no-padding">
+                    <div id="selector-idiomas" class="inline">
+                        
+                        <span class="activo">Galego</span>	
+                        <span>|</span>	
+                        <a href="?lang=es&amp;cambioIdioma=true&amp;N=824580" lang='es'>Castellano</a>	
+                        
+                        
+                    </div>
+                </div>
+            </div>
+
+            <div id="logos-cabeceira" class="row">	
+                <div class="col-sm-12 no-padding">
+                    <div id="logo-pcpg" class="inline">
+                        <h1>
+                            <a class="inline" href="portada.jsp?lang=gl">	            	            	
+                                <img  alt="Contratos P&uacute;blicos de Galicia" src="img/logos/logo_cpg.svg?v=20260428144224577" width="auto" height="auto" />	                                            
+                            </a>
+                        </h1>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+
+        <div id="menu-main" class="row no-padding no-margin">
+            <div id="navegacion-principal" class="page-max-width">
+                <div class="collapse navbar-collapse no-padding">
+                    <nav class="navbar navbar-default no-padding no-margin">
+                        <ul class="nav-menu nav navbar-nav ">
+                            <li class="nav-item">	
+                                <a href="inicio.jsp?lang=gl" class="tooltip-cpg" data-toggle="tooltip" data-placement="bottom" title="Presentación do portal ">Presentación</a>
+                            </li>
+                            <li class="nav-item">	
+                                <a href="portada.jsp?lang=gl" class="tooltip-cpg" data-toggle="tooltip" data-placement="bottom" title="Consulta das publicacións">Publicacións</a>	                                                
+                            </li>
+                            <li class="nav-item">	
+                                <a href="consultaPerfil.jsp?lang=gl" class="tooltip-cpg" data-toggle="tooltip" data-placement="bottom" title="Perfil do contratante">Perfil do contratante</a>	                                                
+                            </li>
+                            <li class="dropdown nav-item">	
+                                <a aria-expanded="false" role="button" data-placement="top" title="Consulte a documentación asociada" class="doc-tooltip doc-dropdown tooltip-cpg" data-toggle="dropdown" href="#" onkeydown="if(event.key === 'Enter' || event.key === ' ') { this.click(); }">Documentación</a>	
+                                <ul role="menu" class="dropdown-menu">	
+                                    <li>	
+                                        <a role="menuitem" href="http://manual-licitacions.xunta.gal/" target="_blank" rel="noopener noreferrer">
+                                            Manual de licitacións
+                                        </a>	
+                                    </li>
+                                    <li>	
+                                        <a role="menuitem" href="http://ficheiros-web.xunta.gal/transparencia/documentos/guia_contratacion_pemes.pdf" target="_blank" rel="noopener noreferrer">	
+                                            Guía de contratación pública para PEMES
+                                        </a>	
+                                    </li>
+                                </ul>
+                            </li>
+                            <li id="menu-acceder" class="dropdown nav-item">
+                                <a aria-expanded="false" role="button" data-toggle="dropdown" class="dropdown-toggle" href="#" onkeydown="if(event.key === 'Enter' || event.key === ' ') { this.click(); }">Acceder</a>
+                                <ul role="menu" class="dropdown-menu dropdown-menu-right">	
+                                    <li>	
+                                        <a role="menuitem" class="tooltip-cpg" data-placement="left" data-toggle="tooltip" title="Servizo destinado ao sector público autonómico de Galicia" href="acceso.jsp?lang=gl">
+                                            Acceso de organismos (só sector público)
+                                        </a>	
+                                    </li>
+                                    <li>	
+                                        <a role="menuitem" class="tooltip-cpg" data-placement="left" data-toggle="tooltip" title="Servizo destinado ás persoas licitadoras" href="https://www.conselleriadefacenda.es/sicon">	
+                                            Servizo para persoas licitadoras
+                                        </a>	
+                                    </li>
+                                </ul>
+                            </li>
+                        </ul>
+                    </nav>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div id="navegacion-cabeceira" class="visible-xs">
+        <!-- visible-xs: para moviles -->
+        <div class="navbar-header">
+            <button type="button" class="navbar-toggle collapsed" data-toggle="collapse" data-target="#nav-principal">	
+                <span class="sr-only">Toggle navigation</span>	
+            </button>   
+            <div id="logo-pcpg-mv">
+                <h1>
+                    <a class="inline" href="portada.jsp?lang=gl">	            	            	
+                        <img alt="Contratos P&uacute;blicos de Galicia" src="img/logos/logo_cpg.svg?v=20260428144224577"  width="auto" height="auto">	            
+                    </a>
+                </h1>
+            </div>
+        </div>
+        <div id="nav-principal" class="collapse navbar-collapse">
+            <div class="idiomas row">
+                
+                <div class="col-xs-6 activo" >Galego</div>	
+                <div class="col-xs-6">
+                    <a href="?lang=es&amp;cambioIdioma=true&amp;N=824580" lang='es'>Castellano</a>
+                </div>
+                
+                
+            </div>
+            <ul class="nav navbar-nav utilidades">                                                
+                <li class="nav-item ">	
+                    <a href="inicio.jsp?lang=gl">Presentación</a>
+                </li>
+                <li class="nav-item ">	
+                    <a  href="portada.jsp?lang=gl">Publicacións</a>
+                </li>
+                <li class="nav-item ">	
+                    <a  href="consultaPerfil.jsp?lang=gl">Perfil do contratante</a>
+                </li>
+                <li class="nav-item dropdown">	
+                    <a class="dropdown-toggle" aria-expanded="false" role="button" data-toggle="dropdown" href="#" onkeydown="if(event.key === 'Enter' || event.key === ' ') { this.click(); }">Documentación</a>
+                    <ul role="menu" class="dropdown-menu">	
+                        <li>	
+                            <a role="menuitem" href="http://manual-licitacions.xunta.gal/" target="_blank" rel="noopener noreferrer">
+                                Manual de licitacións
+                            </a>	
+                        </li>
+                        <li>	
+                            <a role="menuitem" href="http://ficheiros-web.xunta.gal/transparencia/documentos/guia_contratacion_pemes.pdf" target="_blank" rel="noopener noreferrer">	
+                                Guía de contratación pública para PEMES
+                            </a>	
+                        </li>
+                    </ul>
+                </li>
+                <li id="menu-acceder-movil" class="nav-item dropdown"> 
+                    <a aria-expanded="false" role="button" data-toggle="dropdown" class="dropdown-toggle" href="#" onkeydown="if(event.key === 'Enter' || event.key === ' ') { this.click(); }">Acceder</a>
+                    <ul role="menu" class="dropdown-menu">	
+                        <li>	
+                            <a role="menuitem" href="acceso.jsp?lang=gl">
+                                Acceso de organismos (só sector público)
+                            </a>	
+                        </li>
+                        <li>	
+                            <a role="menuitem" href="instrucciones.jsp?lang=gl">	
+                                Servizo para persoas licitadoras
+                            </a>	
+                        </li>
+                    </ul>
+                </li>                                                
+            </ul>   
+
+        </div>
+    </div>
+    <div id="header-overflow" class="visible-xs"></div> 
+</header>
+              
+
+<div class="alert alert-danger text-center" style="margin:0;background-color: #a00;border-color:#700;border-radius:0">
+    <a data-toggle="collapse" href="#superaviso" style="color:#fff">
+        <em class="glyphicon glyphicon-bullhorn"></em>
+        &nbsp;
+        
+        AVISO IMPORTANTE: SUPLANTACIÓN DE PERSONALIDADE NA XESTIÓN DAS GARANTÍAS DEFINITIVAS
+        
+        
+    </a>
+    <div class="page-max-width collapse row text-left" id="superaviso" style="color:#fff">
+        <hr />
+        <div class="col-xs-1">&nbsp;</div>
+        <div class="col-xs-9">
+            
+        <div style="text-align: justify;">  Foron detectados intentos de suplantación de identidade dos poderes adxudicadores usuarios da Plataforma de contratación do sector público (PLACSP,) na cal se publican, por interconexión, os contratos do sector público galego de Contratos públicos de Galicia.<br><br> O proceder dos estafadores é sempre o mesmo:<br><br> Unha vez que se publica a identidade do futuro adxudicatario da licitación, envían un correo electrónico desde unha conta simulada que se fai pasar pola Plataforma de Contratación do sector público (PLACSP) para solicitar a constitución da fianza definitiva correspondente á licitación de que se vai ser adxudicatario. Para isto sempre facilitan un número de conta dunha entidade bancaria situada no estranxeiro.<br><br>Por tanto, pídese a máxima atención aos licitadores propostos como adxudicatarios e proporciónanse as seguintes recomendacións:<br><br><div style="margin-left:40px;">1- Desconfíen de toda comunicación recibida polas canles non habituais de comunicación.</div><br><div style="margin-left:40px;">2- Comproben os dominios (xxxxxx@domino) desde os cales reciben os correos electrónicos e que estes corresponden cos dos poderes adxudicadores con que se licitou.</div><br><div style="margin-left:40px;">3- En caso de recibir documentos electrónicos (formato PDF) pode verificar a autenticidade dos mesmos, mediante o código de verificación electrónica do que dispoñen os documentos.</div><br><div style="margin-left:40px;">4- Eviten presentar garantías mediante transferencia bancaria, dado que é a forma que teñen os estafadores de realizar a estafa.</div><br><div style="margin-left:40px;">5- En caso de dúbida, no expediente publicado en Contratos públicos de Galicia (CPG) dispoñen dun teléfono e correo electrónico dos xestores do órgano de contratación na epígrafe CONTACTO, que encontrarán na esquina superior dereita da páxina coa información especifica do procedemento. Nese teléfono ou correo poderán verificar a autenticidade de calquera comunicación.</div><br>En caso de coñecer algunha actuación deste tipo, debe pórse en coñecemento desta plataforma (enderezo de correo:  Plataformacontrataciongalicia@xunta.gal) para a súa persecución.</div>
+        
+        
+        </div>
+        <div class="col-xs-1">
+            <button type="button" class="btn btn-link" style="color:#fff" data-toggle="collapse" data-target="#superaviso">
+                <em class="glyphicon glyphicon-remove"></em>
+            </button>
+        </div>
+    </div>
+</div>
+
+
+                <div class="page-max-width migas">
+                    <div class="row vertical-align">
+                        <div class="col-md-10 col-xs-8">
+                            <ol class="breadcrumb margin-bottom-0 padding-left-0">
+                                <li>
+                                    <a data-placement="bottom" data-toggle="tooltip" class="no-underline breadcum-home-link tooltip-cpg" title="Consulta das publicacións" href="https://www.contratosdegalicia.gal/portada.jsp?lang=gl">
+                                        Inicio
+                                    </a>
+                                </li>
+                                <li><a href="javascript:volver(700);">Resultado licitacións</a></li>
+                                  
+                                                            
+                                   <li class="active">ID publicación: 824580</li>
+                                   
+                            </ol>
+                        </div>
+                        <div class="col-md-2 col-xs-4 text-right"> 
+                            <button type="button" class="btn btn-link" onclick="javascript:volver(700);">
+                                <span class="glyphicon glyphicon-circle-arrow-left"></span>
+                                Volver
+                            </button> 
+                        </div>
+                    </div>
+                </div>
+
+                <section id="consulta" class="page-max-width consulta">
+                    
+                    
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<form name='formOculto' id='formOculto' method='post' action="#">
+    <input type="hidden" id="OR"        name="OR"        value='242'/> 
+    <input type="hidden" id="lang"      name="lang"      value='gl'/>  
+    <input type="hidden" id="N"         name="N"         value=''/>  
+    <input type="hidden" id="ID"        name="ID"        value='700'/>  
+    <input type="hidden" id="S"         name="S"         value='C'/>  
+</form>
+
+<div id="consulta-datos-xerais">
+    <div class="container-fluid">
+        <div class="box-pcpg" >
+            <div class="row" >
+                <div class="titulo" id="objeto">        
+                    <div class="col-md-6 texto-masLargoQuelaCaja">
+                        <h2>
+                            Información do procedemento
+                        </h2>   
+                    </div>
+                    <div class="col-md-6 text-right">
+                        <p>
+                            Estado do procedemento:
+                            
+                                <em>Anulado/Desestimado</em>
+                            
+                            
+                        </p>
+                    </div>
+                </div>
+            </div>
+            <script type="text/javascript">
+
+                // Constantes de aplicación
+                var mantoUrlContratacion = 'https://www.contratosdegalicia.gal/';
+                
+            </script> 
+            <div class="row">            
+                <div class="col-md-8 col-sm-7 organismo">
+                    <div class="logo-texto">
+                        
+                            <a href="javascript:consultaOrganismo()" >Axencia Turismo de Galicia</a>
+                        
+                    </div>                
+                </div>
+                <div class="col-md-4 col-sm-5 enlaces text-right">
+                    <div class="hidden-xs">
+                                                    
+                            <button type="button" data-placement="bottom" class="btn btn-popover btn-sm button_popover_tooltip tooltip-cpg" tooltip-title="Datos de contacto do procedemento" 
+                                popover-title="Datos de contacto do procedemento"  popover-content="#popover-content-contacto">
+                                <span class="glyphicon glyphicon-map-marker"></span>
+                                Contacto
+                            </button>
+                            <div id="popover-content-contacto" class="hidden">
+                                <div class="input-group">
+                                    <span class="input-group-addon">
+                                        <span class="glyphicon glyphicon-phone-alt"></span>
+                                        Teléfono
+                                    </span>
+                                    <div class="form-control">
+                                        <a href="#"> &nbsp; 981546225   </a>
+                                    </div>
+                                </div>
+
+                                <div class="input-group">
+                                    <span class="input-group-addon">
+                                        <span class="glyphicon glyphicon-envelope"></span> Correo electrónico
+                                    </span>
+                                    <div class="form-control">
+                                        <small>
+                                             &nbsp;<a href='mailto:
+contratacion-turismo.cpr@xunta.es                                                                   ?Subject=PCPG: 
+Axencia Turismo de Galicia (ID: 824580)'>
+contratacion-turismo.cpr@xunta.es                                                                   </a>
+
+                                        </small>
+                                    </div>
+                                </div>
+                            </div>
+                        
+                        <button type="button" data-placement="bottom" data-placement="bottom" class="btn btn-popover btn-sm button_popover_tooltip tooltip-cpg" tooltip-title="Enderezo electrónico do procedemento" 
+                        popover-title="Enderezo electrónico do procedemento" popover-content="#popover-content-enlace">
+                            <span class=" glyphicon glyphicon-new-window"></span>
+                            Ligazón
+                        </button>
+                        <div id="popover-content-enlace" class="hidden">
+                            <div class="input-group">
+                                <span class="input-group-addon" >
+                                    <span class="glyphicon glyphicon-link"></span>
+                                </span>
+                                <div class="form-control link">
+                                    <small>
+                                        
+                                        
+                                            <a href="https://www.contratosdegalicia.gal/licitacion?N=824580">https://www.contratosdegalicia.gal/licitacion?N=824580</a>
+                                        
+                                    </small>
+                                </div>
+                            </div>
+                        </div>
+                        <a data-toggle="tooltip" data-placement="bottom" title="RSS do procedemento" href="https://www.contratosdegalicia.gal/rss/concurso-824580.rss" target="_blank"  class="btn btn-popover btn-sm tooltip-cpg" role="button">
+                            <span class="glyphicon glyphicon-bullhorn"></span>
+                            RSS
+                        </a>
+                    </div>
+                    <div id="info-cotratante-collapse" class="visible-xs">
+                        <span class="panel">
+                            <button type="button" class="btn btn-popover btn-sm button_popover_tooltip tooltip-cpg"  
+                                    data-toggle="collapse" data-target="#collapse-content-contacto" data-parent="#info-cotratante-collapse" >
+                                <span class="glyphicon glyphicon-map-marker"></span>
+                                Contacto
+                            </button>
+                        </span>
+                        <span class="panel">
+                            <button type="button" class="btn btn-popover btn-sm button_popover_tooltip tooltip-cpg"
+                                    data-toggle="collapse" data-target="#collapse-content-enlace" data-parent="#info-cotratante-collapse">
+                                <span class=" glyphicon glyphicon-new-window"></span>
+                                Web
+                            </button>
+                        </span>
+                        <a data-toggle="tooltip" data-placement="bottom" title="RSS do procedemento" href="https://www.contratosdegalicia.gal/rss/concurso-824580.rss" target="_blank" class="btn btn-popover btn-sm tooltip-cpg" role="button">
+                            <span class="glyphicon glyphicon-bullhorn"></span>
+                            RSS
+                        </a> 
+                        <div class="panel">
+                            <div id="collapse-content-contacto" class="collapse">
+                                <div class="info-contratante">                                     
+                                    <div class="input-group">
+                                        <span class="input-group-addon">
+                                            <span class="glyphicon glyphicon-phone-alt"></span> Teléfono
+                                        </span>
+                                        <div class="form-control">
+                                             &nbsp; 981546225   
+                                        </div>
+                                    </div>
+                                    <div class="input-group">
+                                        <span class="input-group-addon">
+                                            <span class="glyphicon glyphicon-envelope"></span>
+                                        </span>
+                                        <div class="form-control">
+                                             &nbsp;<a href='mailto:
+contratacion-turismo.cpr@xunta.es                                                                   ?Subject=PCPG: 
+Axencia Turismo de Galicia (ID: 824580)'>
+contratacion-turismo.cpr@xunta.es                                                                   </a>
+
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="panel">
+                            <div id="collapse-content-enlace" class="collapse">
+                                <div class="info-contratante">
+                                    <div class="input-group">
+                                        <span class="input-group-addon" >
+                                            <span class="glyphicon glyphicon-link"></span>
+                                        </span>
+                                        <div class="form-control link">
+                                            <small>
+                                                <a href="https://www.contratosdegalicia.gal/licitacion?N=824580">https://www.contratosdegalicia.gal/licitacion?N=824580</a>
+                                            </small>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div> 
+                        </div>
+                    </div>
+                </div>    
+            </div>                    
+            
+                <div class="col-md-12 col-sm-12 ">
+                    <div>
+                        <div class="infoReferencia">
+                            <dl>
+                                <dt>Referencia</dt>
+                                <dd style="font-family: Verdana;font-size: 12px;color: #000;">2024-142</dd>                            
+                            </dl>
+                        </div>
+                    </div>
+                </div>
+             
+            <div class="row">
+                <div class="row infoConcurso">             
+                    
+
+                        <div class="col-md-12 col-sm-12">
+                            <dl>
+                                <dt>Obxecto</dt>
+                                <dd>Contrato baseado no acordo marco do servizo de elaboración, produción e plan de medios da campaña de promoción dos recursos naturais, culturais e gastronómicos de Galicia, campaña de promoción de Galicia durante a primavera. Tramitación anticipada de gasto.</dd>                            
+                            </dl>
+                        </div>
+                            
+                        <div class="col-md-3 col-sm-4">
+                            <dl>            
+                                <dt>Tipo de tramitación</dt>
+                                <dd>Ordinaria</dd>        
+                            </dl>
+                        </div>      
+
+                        <div class="col-md-3 col-sm-4">
+                            <dl>
+                                <dt>Tipo de procedemento</dt>
+                                <dd>Negociado sen publicidade</dd>
+                            </dl>
+                        </div>
+                            
+
+                        <div class="col-md-3 col-sm-4">
+                            <dl>
+                                <dt>Tipo de contrato</dt>
+                                <dd>Servizos</dd>
+                            </dl>
+                        </div>
+
+                        <div class="col-md-3 col-sm-4"> 
+                            
+                                <dl>
+                                    <dt>Orzamento base de licitación</dt>
+                                    <dd>
+                                        1.000.000,00
+                                        
+                                        
+                                            con IVE
+                                        
+                                    </dd>
+                                </dl>
+                                        
+                        </div> 
+                                                       
+                        <div class="col-md-3 col-sm-4">
+                            <dl>
+                                <dt>Nº lotes</dt>
+                                <dd>
+                                    _
+                                    
+                                </dd>
+                            </dl>
+                        </div>   
+                       
+                        <div class="col-md-3 col-sm-4">
+                            <dl>            
+                                <dt>Valor estimado</dt>
+                                
+                                    <dd>826.446,28 sen IVE</dd>        
+                                  
+                                  
+
+                            </dl>
+                        </div>  
+                          
+                            
+                            <div class="col-md-3 col-sm-4">
+                                <dl>
+                                    <dt>Sistema de contratación</dt>
+                                        
+                                        
+                                        <dd>Non aplica                                                  </dd>
+                                                                
+                                </dl>
+                            </div>
+                        
+
+                        
+                         
+                        
+
+                        
+                            <div class="col-md-12">
+                                <dl>
+                                    <dt>Observacións</dt>
+                                    <dd>Este expediente xa foi adxudicado e publicado nesta Plataforma co ID 824279</dd>                                
+                                </dl>
+                            </div>
+                          
+                    
+                    
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+                                            
+<!-- Modal -->
+<div class="modal fade" tabindex="-1" id="ventanaModalLotes" role="dialog">
+    <div class="modal-dialog modal-lg">
+        <!-- Modal content-->
+        <div class="modal-content">  
+            <div class="modal-header modal-header-primary">
+                <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                    <span aria-hidden="true" class="white-text">x</span>
+                </button>
+                <div class="titulo-modal">Relación de lotes</div>                
+            </div>            
+            <div class="modal-body">                                                                                                                                           
+                <div class="row">
+                    <div clas="table-responsive">
+                        <table class="table table-hover" aria-describedby="titulo-modal">
+                            <thead>
+                                <tr>
+                                    <th scope="col">Lote</th>
+                                    <th scope="col">Descrición</th>
+                                    <th scope="col">Valor estimado</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                <div class="row">   
+                    <em class="glyphicon glyphicon-menu-hamburger"></em>                         
+                    <span>ID publicación: 824580</span>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-default" data-dismiss="modal">Pechar</button>
+            </div>    
+        </div>
+    </div>
+</div>     
+
+<!-- Modal -->
+<div class="modal fade" tabindex="-1" id="ventanaModalRecursos" role="dialog">
+    <div class="modal-dialog modal-lg">
+        <!-- Modal content-->
+        <div class="modal-content">  
+            <div class="modal-header modal-header-primary">
+                <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                    <span aria-hidden="true" class="white-text">x</span>
+                </button>
+                <div class="titulo-modal">Datos dos recursos presentados</div>                
+            </div>            
+            <div class="modal-body">                                                                                                                                           
+                <div class="row">
+                    <div clas="table-responsive">
+                        <table class="table table-hover" aria-describedby="titulo-modal">
+                            <thead>
+                                <tr>
+                                    
+                                    <th scope="col">Data de presentación</th>
+                                    <th scope="col">Data de resolución do recurso</th>
+                                    <th scope="col">Observacións</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                <div class="row">   
+                    <em class="glyphicon glyphicon-menu-hamburger"></em>                         
+                    <span>ID publicación: 824580</span>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-default" data-dismiss="modal">Pechar</button>
+            </div>    
+        </div>
+    </div>
+</div>      
+                                    
+<div class="modal fade" tabindex="-1" id="ventanaModalAcuerdo" role="dialog">
+    <div class="modal-dialog">        
+        <div class="modal-content">
+            <div class="modal-header modal-header-primary">
+                <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                    <span aria-hidden="true" class="white-text">x</span>
+                </button>
+                <div class="titulo-modal">Datos do acordo marco</div>                
+            </div>
+            <div class="modal-body">                                                                                                                                           
+                <div class="row">
+                    <dl>
+                        <dt>Enderezo do acordo marco: </dt>
+                        <dd>
+                            
+                        </dd>
+                    </dl>
+                </div>
+                <div class="row">
+                    <dl>
+                        <dt>Obxecto</dt>
+                        <dd>
+                            
+                        </dd>
+                    </dl>
+                </div>
+                <div class="row">
+                    <dl>
+                        <dt>Operadores</dt>
+                        <dd>
+                            0
+                        </dd>
+                    </dl>
+                </div>
+                <div class="row">
+                    <dl>
+                        <dt>Máximo</dt>
+                        <dd>
+                            
+                             
+                                Non
+                            
+                        </dd>
+                    </dl>
+                </div>
+                <div class="row">
+                    <dl>
+                        <dt>Prazo execución acordo marco</dt>
+                        <dd>
+                            0
+                            Ano(s)
+                            0Meses
+                        </dd>
+                    </dl>
+                </div>
+                <div class="row">   
+                    <span class="glyphicon glyphicon-menu-hamburger"></span>                         
+                    <span>ID publicación: 824580</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>               
+                
+<div class="modal fade" tabindex="-1" id="ventanaModalDerivados" role="dialog">
+    <div class="modal-dialog">        
+        <div class="modal-content">
+            <div class="modal-header modal-header-primary">
+                <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                    <span aria-hidden="true" class="white-text">x</span>
+                </button>
+                <div class="titulo-modal">Derivados do acordo marco</div>                
+            </div>
+            <div class="modal-body">                                                                                                                                           
+                <div class="row">
+                    <dl>
+                        <dt>Enderezo do acordo marco: </dt>
+                        <dd>
+                            <a target="_blank" href="https://www.contratosdegalicia.gal/licitacion?N=824580">
+                                https://www.contratosdegalicia.gal/licitacion?N=824580
+                            </a>
+                        </dd>
+                    </dl>
+                </div>
+                <div class="row">
+                    <dl>
+                        <dt>Enderezos dos derivados do acordo marco: </dt>
+                        <dd>
+                            
+                                Por agora, non existen derivados deste acordo marco.
+                            
+                            <ul>
+                            
+                            </ul>
+                        </dd>
+                    </dl>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>     
+                        
+<div class="modal fade" tabindex="-1" id="ventanaModalDerivadosSd" role="dialog">
+    <div class="modal-dialog">        
+        <div class="modal-content">
+            <div class="modal-header modal-header-primary">
+                <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                    <span aria-hidden="true" class="white-text">x</span>
+                </button>
+                <div class="titulo-modal">Derivados do sistema dinámico</div>                
+            </div>
+            <div class="modal-body">                                                                                                                                           
+                <div class="row">
+                    <dl>
+                        <dt>Enderezo do sistema dinámico: </dt>
+                        <dd>
+                            <a target="_blank" href="https://www.contratosdegalicia.gal/licitacion?N=824580">
+                                https://www.contratosdegalicia.gal/licitacion?N=824580
+                            </a>
+                        </dd>
+                    </dl>
+                </div>
+                <div class="row">
+                    <dl>
+                        <dt>Enderezos dos derivados do sistema dinámico: </dt>
+                        <dd>
+                            
+                                Por agora, non existen derivados deste sistema dinámico.
+                            
+                            <ul>
+                            
+                            </ul>
+                        </dd>
+                    </dl>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>   
+                        
+                        
+<div class="modal fade" tabindex="-1" id="ventanaModalSd" role="dialog">
+    <div class="modal-dialog">        
+        <div class="modal-content">
+            <div class="modal-header modal-header-primary">
+                <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                    <span aria-hidden="true" class="white-text">x</span>
+                </button>
+                <div class="titulo-modal">Datos do sistema dinámico</div>                
+            </div>
+            <div class="modal-body">                                                                                                                                           
+                <div class="row">
+                    <dl>
+                        <dt>Enderezo do sistema dinámico: </dt>
+                        <dd>
+                            
+                        </dd>
+                    </dl>
+                </div>
+                <div class="row">
+                    <dl>
+                        <dt>Obxecto</dt>
+                        <dd>
+                            
+                        </dd>
+                    </dl>
+                </div>
+                <div class="row">
+                    <dl>
+                        <dt>Operadores</dt>
+                        <dd>
+                            0
+                        </dd>
+                    </dl>
+                </div>
+                <div class="row">
+                    <dl>
+                        <dt>Prazo execución sistema dinámico</dt>
+                        <dd>
+                            0
+                            Ano(s)
+                            0Meses
+                        </dd>
+                    </dl>
+                </div>
+                <div class="row">   
+                    <span class="glyphicon glyphicon-menu-hamburger"></span>                         
+                    <span>ID publicación: 824580</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>        
+
+                    <div class="container-fluid">
+                        <div id="consultaTabs" class="row">
+                            <!-- Nav tabs -->
+                            <ul class="nav nav-tabs">
+                               
+                                <li class="titulo active"><a href="#consulta-datos" data-toggle="tab">Datos xerais</a></li>
+
+                                <li class="titulo"><a href="#consulta-datos-economicos" data-toggle="tab">Datos económicos</a></li>
+                                
+                                 
+                                 <!-- SI NO TIENE DOCUMENTOS O SI ES CONTRATO MENOR -->    
+                                    <li class="titulo disabled"><a href="#consulta-documentos">Documentos</a></li>
+                                
+                                
+                                <input type="hidden" id="numMesas"  value='4'/> 
+                                <input type="hidden" id="hayFicherosMesaWS"  value='false'/> 
+                                <input type="hidden" id="tipoContratoEmergencia"  value='8'/> 
+                                    
+                                                            
+                                    <li class="titulo"  id="apertura-concurso"><a href="#consulta-mesas" data-toggle="tab" data-toggle="tooltip" class="tooltip-cpg" title="Mesas de contratación">Mesas</a></li>
+                                
+                                
+                                
+                                    <li class="titulo"><a href="#consulta-resolucion" data-toggle="tab">Resolución</a></li>
+                                    
+                                
+                                    
+                                
+                                    <li class="titulo disabled"><a href="#consulta-formalizacion">Formalización</a></li>
+                                
+                                
+                                
+                                    <li class="titulo disabled"><a href="#consulta-execucion">Execución</a></li>
+                                
+
+                                <li class="titulo"><a href="#consulta-historico" data-toggle="tab">Histórico</a></li>
+                            </ul>
+
+                            <div class="tab-content">
+
+                                
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="tab-pane fade in active" id="consulta-datos">
+    <section class="info" id="panel-info">
+        
+            <div class="panel panel-pcpg">
+                <div class="panel-heading">                                        
+                    <div class="panel-title pcpg-fg-color">
+                        Información adicional 
+                    </div>                
+                </div>
+                <div class="panel-body">
+                    <div class="container-fluid">
+                        <div class="row">
+                             
+                            
+                                <div class="col-md-6 col-sm-6">
+                                    <dl class="dl-horizontal">        
+                                        <dt class="detalleReestructuracion" data-toggle="tooltip" title="" data-original-title="Contratos Suxeitos a Regulación Armonizada">Contrato SARA:</dt>
+
+                                        
+                                         
+                                            <dd><span class="glyphicon glyphicon-unchecked" data-toggle="tooltip" title="" data-original-title="Non"></span></dd> 
+                                          
+                                         
+                                    </dl>                                  
+                                </div>
+                             
+                                    
+                                <div class="col-md-6 col-sm-6">
+                                    <dl class="dl-horizontal">                 
+                                        <dt class="detalleReestructuracion">Contratación centralizada :</dt>
+
+                                        
+                                                                           
+                                            <dd><span class="glyphicon glyphicon-unchecked" data-toggle="tooltip" title="" data-original-title="Non"></span></dd> 
+                                          
+                                          
+                                    </dl>
+                                </div>
+                            
+                             
+
+                            <div class="col-md-6 col-sm-6">
+                                <dl class="dl-horizontal">       
+                                    <dt class="detalleReestructuracion">Lei nacional de aplicación:</dt>
+                                    <dd>Non aplica</dd>
+                                </dl>
+                            </div>
+
+                            <div class="col-md-6 col-sm-6">
+                                <dl class="dl-horizontal">   
+                                    <dt class="detalleReestructuracion">Contrato mixto:</dt>
+                                    
+                                                                       
+                                        <dd><span class="glyphicon glyphicon-unchecked" data-toggle="tooltip" title="" data-original-title="Non"></span></dd>
+                                      
+                                    
+                                </dl> 
+                            </div>     
+
+                            <div class="col-md-6 col-sm-6">
+                                <dl class="dl-horizontal">          
+                                    <dt class="detalleReestructuracion">Subasta electrónica:</dt>
+                                    
+                                                                       
+                                        <dd><span class="glyphicon glyphicon-unchecked" data-toggle="tooltip" title="" data-original-title="Non"></span></dd>
+                                      
+                                    
+                                </dl>
+                            </div>
+                            
+                                <div class="col-md-6 col-sm-6">
+                                    <dl class="dl-horizontal">          
+                                        
+                                            <dt class="detalleReestructuracion">Compra pública estratéxica:</dt>
+                                            <dd>Non aplica</dd>
+                                        
+                                                   
+                                    </dl>
+                                </div>
+                            
+                             
+                             
+                             
+                              
+                                              
+                        </div> 
+                    </div>
+                </div>
+            </div>
+                                 
+        
+        <div class="panel panel-pcpg">
+            <div class="panel-heading">                                        
+                <div class="panel-title pcpg-fg-color">
+                    Medios de publicacións
+                    
+                    <div class="pull-right">
+                        <a href="http://contrataciondelestado.es/wps/portal/plataforma" title="Acceso a Plataforma de contratación do Estado">
+                            <img height="22" src="img/logos/logoPLACE.PNG" alt="PLACSP"/>
+                        </a>
+                    </div>
+                    
+                </div>                
+            </div>
+            <div class="panel-body">
+                <div class="container-fluid">
+                    <div class="row">
+                        <div class="col-sm-7 col-xs-12 dtPcPG-large">
+                            <dl class="dl-horizontal">
+                                <dt>Data de difusión en Contratos Públicos de Galicia:</dt>
+                                <dd>06-02-2025 09:22</dd>
+                            </dl>
+                        </div>
+                            
+                            <div class="col-sm-5 col-xs-12">
+                                <dl class="dl-horizontal">
+                                    <dt>Selo:</dt>
+                                    <dd class="tooltip-cpg" data-placement="left" data-toggle="tooltip" title="Código de anotación no Rexistro Electrónico da Xunta de Galicia (REXEL) que da fe do momento no que esta operación foi publicada en Contratos Públicos de Galicia (CPG)">
+                                    
+                                        PR RWEB01 2025/222886
+                                    
+                                    </dd>
+                                </dl>
+                            </div>
+                        
+                    </div>
+                    <div class="row">
+                        <div class="table-responsive table-condensed">
+                            <table class="table" aria-describedby="titulo-modal">
+                                <thead>
+                                    <tr>
+                                        <th scope="col" class="col-sm-2">Perfil</th>
+                                        <th scope="col" class="col-sm-2">BOP</th>
+                                        <th scope="col" class="col-sm-2">DOG</th>
+                                        <th scope="col" class="col-sm-2">BOE</th>
+                                        <th scope="col" class="col-sm-2">Data envío DOUE</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr>
+                                        <td>
+                                            06-02-2025                                            
+                                        </td>
+                                        <td>
+                                            Non
+                                
+                                </td>
+                                <td>
+                                    Non 
+                                
+                                </td>
+                                <td>
+                                    Non 
+                                
+                                </td>
+                                <td>
+                                    Non 
+                                
+                                </td>
+                                </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                    
+                </div>
+            </div>
+        </div>
+
+        	
+            <div class="panel panel-pcpg">
+                <div class="panel-heading">
+                    <div class="panel-title pcpg-fg-color">
+                        <a data-toggle="collapse" data-parent="" href="#collapseCPV">
+                            CPV - Vocabulario común de contratos públicos
+                            <span class="pull-right" data-container="body">
+                                <span class="glyphicon glyphicon-minus"></span>
+                            </span>
+                        </a>
+                    </div>
+                </div>
+                <div id="collapseCPV" class="panel-collapse collapse in">
+                    <div class="panel-body">
+                        <div class="tabla-concurso">
+                            <div class="table-responsive">
+                                <table class="table" aria-describedby="titulo-modal">
+                                    <thead>
+                                        <tr>
+                                            <th scope="col">código CPV</th>
+                                    <th scope="col">Lote</th>
+                                    <th scope="col">Data difusión</th>
+                                    </tr>
+                                    </thead>
+                                    <tbody>
+                                    
+                                        <tr>
+                                            <td>
+                                                79341000&nbsp;Servicios de publicidad
+                                            </td>
+                                            <td>
+                                                
+                                                _
+                                                
+                                            </td>
+                                            <td>
+                                                06-02-2025 09:22
+                                            </td>
+                                        </tr>
+                                    
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        
+
+        		                                    
+            <div class="panel panel-pcpg">
+                <div class="panel-heading">
+                    <div class="panel-title pcpg-fg-color">
+                        <a data-toggle="collapse" data-parent="" href="#collapseNUT">
+                            NUT - Nomenclatura das Unidades Territoriais Estatísticas
+                            <span class="pull-right" data-container="body">
+                                <span class="glyphicon glyphicon-minus"></span>
+                            </span>
+                        </a>
+                    </div>
+                </div>
+                <div id="collapseNUT" class="panel-collapse collapse in">
+                    <div class="panel-body">
+                        <div class="tabla-concurso">
+                            <div class="table-responsive">
+                                <table class="table table-condensed" aria-describedby="titulo-modal">
+                                    <thead>
+                                        <tr>
+                                            <th scope="col">NUT</th>
+                                            <th scope="col">Lote</th>
+                                            <th scope="col">Data difusión</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                    
+                                        <tr>
+                                            <td>
+                                                ES111&nbsp;A Coruña
+                                            </td>
+                                            <td>
+                                                
+                                                _
+                                                
+                                            </td>
+                                            <td>
+                                                06-02-2025 09:22
+                                            </td>
+                                        </tr>
+                                    
+                                        <tr>
+                                            <td>
+                                                ES112&nbsp;Lugo
+                                            </td>
+                                            <td>
+                                                
+                                                _
+                                                
+                                            </td>
+                                            <td>
+                                                06-02-2025 09:22
+                                            </td>
+                                        </tr>
+                                    
+                                        <tr>
+                                            <td>
+                                                ES113&nbsp;Ourense
+                                            </td>
+                                            <td>
+                                                
+                                                _
+                                                
+                                            </td>
+                                            <td>
+                                                06-02-2025 09:22
+                                            </td>
+                                        </tr>
+                                    
+                                        <tr>
+                                            <td>
+                                                ES114&nbsp;Pontevedra
+                                            </td>
+                                            <td>
+                                                
+                                                _
+                                                
+                                            </td>
+                                            <td>
+                                                06-02-2025 09:22
+                                            </td>
+                                        </tr>
+                                    
+                                        <tr>
+                                            <td>
+                                                ES300&nbsp;Madrid
+                                            </td>
+                                            <td>
+                                                
+                                                _
+                                                
+                                            </td>
+                                            <td>
+                                                06-02-2025 09:22
+                                            </td>
+                                        </tr>
+                                    
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        
+
+        
+    </section>
+</div>
+
+                                
+                                 
+
+
+
+
+
+
+
+
+
+<div class="tab-pane fade" id="consulta-datos-economicos">
+    <div class="panel-group">
+        <div class="panel panel-pcpg">
+            <div class="panel-heading">
+                <div class="panel-title pcpg-fg-color">
+                    Detalle
+                </div>
+            </div>
+            <div class="panel-body">
+                
+                 
+                    <div class="col-md-12">                     
+                        <dl class="dl-horizontal">    
+                            <dt class="detalleReestructuracion">Orzamento base de licitación:</dt>
+                            <dd>
+                                1.000.000,00
+                                
+                                
+                                    con IVE
+                                
+                            </dd>
+                        </dl>                                
+                    </div>
+                
+                                
+                    <div class="col-md-12">
+                        <dl class="dl-horizontal">               
+                            <dt class="detalleReestructuracion">Valor estimado:</dt>
+                            
+                                <dd>826.446,28 sen IVE</dd>        
+                              
+                              
+                        </dl>
+                    </div>
+                
+                    <div class="col-md-12">
+                        <dl class="dl-horizontal">              
+                            <dt class="detalleReestructuracion" >Tipo de financiamento:</dt>
+                            <dd>Non existe financiamento con fondos da UE</dd>
+                        </dl>
+                    </div>
+                  
+            </div>
+        </div>
+    </div>
+</div>
+
+
+                                 
+                                
+                                      
+                                    
+                                        
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<script type="text/javascript" src="jquery/jquery.blockUI.min.js?v=20260428144224577"></script>
+<script type="text/javascript" src="js/js-sap/suscripciones-recaptcha-v3.js?v=20260428144224577"></script>
+
+
+
+
+
+
+
+<script type="text/javascript">
+
+    var flotante = false;
+    var i18n_msgCargando = 'Cargando. Agarde un momento...';  
+
+    function cargando()
+    {
+        capaCargando(i18n_msgCargando);
+    }
+        
+</script>
+<div class="tab-pane fade" id="consulta-mesas">
+    
+              
+        <div class="panel panel-pcpg">
+            <div class="panel-heading">
+                <div class="panel-title pcpg-fg-color">Datos da mesa 1</div>
+            </div> 
+            <div class="panel-body">
+                
+                <div class="row">
+                    <dl class="dl-horizontal">
+                        <dt>Acto:</dt>
+                        <dd>
+                            
+                                Acto                            
+                                
+                                
+                                    - Non Público - 
+                                
+                                <span id="span_actoMesa1">Apertura sobre A e B</span>
+                            
+                            
+                        </dd>
+                    </dl> 
+                </div> 
+                 
+                
+                
+
+                
+                    <div class="row">
+                        <dl class="dl-horizontal">
+                            <dt>Lugar:</dt>
+                            <dd>
+                                <span class="cAzulOscuro" id="span_lugarMesa1">Axencia Turismo de Galicia</span>
+                            </dd>
+                        </dl> 
+                    </div>
+                
+                        
+                
+                
+                    <div class="row">
+                        <dl class="dl-horizontal">
+                            <dt>Data e hora:</dt>
+                            <dd>
+                                <span class="cAzulOscuro">
+                                    16/01/2025 10:25
+                                </span>
+                            </dd>
+                        </dl> 
+                    </div>
+                
+                
+                 
+                    <div class="row">
+                        <dl class="dl-horizontal">
+                            <dt>Arquivos da mesa:</dt>                            
+                        </dl> 
+                    </div>
+                                         
+                        <div class="row">
+                            <div class="table-responsive table-condensed">
+                                <table class="table" aria-describedby="titulo-modal">
+                                    <thead>
+                                        <tr>                           
+                                            <th scope="col" class="col-sm-3"><a href='#'>Título</a></th>
+                                            <th scope="col" class="col-sm-3"><a href='#' data-toggle="tooltip" class="tooltip-cpg" title="Data e hora de difusión do arquivo">Data</a></th>
+                                            <th scope="col" class="col-sm-3"><a href='#'>Estado</a></th>
+                                            <th scope="col" class="col-sm-3"><a href='#'>Descarga</a></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        
+                                         <!-- Visible --> 
+                                             <!-- Vixente --> 
+                                                <tr>                                        
+                                            
+                                                <td>                                            
+                                                    <a href="javascript:mostrarTabla(16,0,1,824580,1)">
+                                                        <span class="glyphicon glyphicon-file"></span>
+                                                        
+                                                            Acta sobre A
+                                                        
+                                                    </a>
+                                                </td>
+                                                <td>06-02-2025 09:24:23</td>
+                                                <td>Vixente</td>
+                                                <td>
+                                                    <a href ="javascript:mostrarTabla(16,0,1,824580,1)" title=".pdf">
+                                                        Formato&nbsp;.pdf&nbsp;
+                                                    </a>
+                                                    <span>(311.90 KB)</span>
+                                                </td>
+                                            </tr>
+                                            
+                                            
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    
+                    
+                
+                
+            </div>
+        </div>   
+    
+              
+        <div class="panel panel-pcpg">
+            <div class="panel-heading">
+                <div class="panel-title pcpg-fg-color">Datos da mesa 2</div>
+            </div> 
+            <div class="panel-body">
+                
+                <div class="row">
+                    <dl class="dl-horizontal">
+                        <dt>Acto:</dt>
+                        <dd>
+                            
+                                Acto                            
+                                
+                                
+                                    - Non Público - 
+                                
+                                <span id="span_actoMesa2">Exame do informe técnico de valoración dos criterios de adxudicación non avaliables mediante fórmulas e apertura do Sobre C</span>
+                            
+                            
+                        </dd>
+                    </dl> 
+                </div> 
+                 
+                
+                
+
+                
+                    <div class="row">
+                        <dl class="dl-horizontal">
+                            <dt>Lugar:</dt>
+                            <dd>
+                                <span class="cAzulOscuro" id="span_lugarMesa2">Axencia Turismo de Galicia</span>
+                            </dd>
+                        </dl> 
+                    </div>
+                
+                        
+                
+                
+                    <div class="row">
+                        <dl class="dl-horizontal">
+                            <dt>Data e hora:</dt>
+                            <dd>
+                                <span class="cAzulOscuro">
+                                    28/01/2025 10:00
+                                </span>
+                            </dd>
+                        </dl> 
+                    </div>
+                
+                
+                 
+                    <div class="row">
+                        <dl class="dl-horizontal">
+                            <dt>Arquivos da mesa:</dt>                            
+                        </dl> 
+                    </div>
+                                         
+                        <div class="row">
+                            <div class="table-responsive table-condensed">
+                                <table class="table" aria-describedby="titulo-modal">
+                                    <thead>
+                                        <tr>                           
+                                            <th scope="col" class="col-sm-3"><a href='#'>Título</a></th>
+                                            <th scope="col" class="col-sm-3"><a href='#' data-toggle="tooltip" class="tooltip-cpg" title="Data e hora de difusión do arquivo">Data</a></th>
+                                            <th scope="col" class="col-sm-3"><a href='#'>Estado</a></th>
+                                            <th scope="col" class="col-sm-3"><a href='#'>Descarga</a></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        
+                                         <!-- Visible --> 
+                                             <!-- Vixente --> 
+                                                <tr>                                        
+                                            
+                                                <td>                                            
+                                                    <a href="javascript:mostrarTabla(17,0,1,824580,2)">
+                                                        <span class="glyphicon glyphicon-file"></span>
+                                                        
+                                                            Acta sobre B
+                                                        
+                                                    </a>
+                                                </td>
+                                                <td>06-02-2025 09:26:03</td>
+                                                <td>Vixente</td>
+                                                <td>
+                                                    <a href ="javascript:mostrarTabla(17,0,1,824580,2)" title=".pdf">
+                                                        Formato&nbsp;.pdf&nbsp;
+                                                    </a>
+                                                    <span>(519.36 KB)</span>
+                                                </td>
+                                            </tr>
+                                            
+                                            
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    
+                    
+                
+                
+            </div>
+        </div>   
+    
+              
+        <div class="panel panel-pcpg">
+            <div class="panel-heading">
+                <div class="panel-title pcpg-fg-color">Datos da mesa 3</div>
+            </div> 
+            <div class="panel-body">
+                
+                <div class="row">
+                    <dl class="dl-horizontal">
+                        <dt>Acto:</dt>
+                        <dd>
+                            
+                                Acto                            
+                                
+                                
+                                    - Non Público - 
+                                
+                                <span id="span_actoMesa3">Exame do informe de valoración dos criterios de adxudicación avaliables mediante fórmulas e clasificación por orde decrecente e proposta de adxudicación</span>
+                            
+                            
+                        </dd>
+                    </dl> 
+                </div> 
+                 
+                
+                
+
+                
+                    <div class="row">
+                        <dl class="dl-horizontal">
+                            <dt>Lugar:</dt>
+                            <dd>
+                                <span class="cAzulOscuro" id="span_lugarMesa3">Axencia Turismo de Galicia</span>
+                            </dd>
+                        </dl> 
+                    </div>
+                
+                        
+                
+                
+                    <div class="row">
+                        <dl class="dl-horizontal">
+                            <dt>Data e hora:</dt>
+                            <dd>
+                                <span class="cAzulOscuro">
+                                    05/02/2025 10:00
+                                </span>
+                            </dd>
+                        </dl> 
+                    </div>
+                
+                
+                 
+                    <div class="row">
+                        <dl class="dl-horizontal">
+                            <dt>Arquivos da mesa:</dt>                            
+                        </dl> 
+                    </div>
+                                         
+                        <div class="row">
+                            <div class="table-responsive table-condensed">
+                                <table class="table" aria-describedby="titulo-modal">
+                                    <thead>
+                                        <tr>                           
+                                            <th scope="col" class="col-sm-3"><a href='#'>Título</a></th>
+                                            <th scope="col" class="col-sm-3"><a href='#' data-toggle="tooltip" class="tooltip-cpg" title="Data e hora de difusión do arquivo">Data</a></th>
+                                            <th scope="col" class="col-sm-3"><a href='#'>Estado</a></th>
+                                            <th scope="col" class="col-sm-3"><a href='#'>Descarga</a></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        
+                                         <!-- Visible --> 
+                                             <!-- Vixente --> 
+                                                <tr>                                        
+                                            
+                                                <td>                                            
+                                                    <a href="javascript:mostrarTabla(18,1,1,824580,3)">
+                                                        <span class="glyphicon glyphicon-file"></span>
+                                                        
+                                                            Acta 3
+                                                        
+                                                    </a>
+                                                </td>
+                                                <td>06-02-2025 12:23:05</td>
+                                                <td>Vixente</td>
+                                                <td>
+                                                    <a href ="javascript:mostrarTabla(18,1,1,824580,3)" title=".pdf">
+                                                        Formato&nbsp;.pdf&nbsp;
+                                                    </a>
+                                                    <span>(443.97 KB)</span>
+                                                </td>
+                                            </tr>
+                                            
+                                        
+                                         <!-- Visible --> 
+                                            
+                                                <tr class="novigente">                                        
+                                            
+                                                <td>                                            
+                                                    <a href="javascript:mostrarTabla(18,2,1,824580,3)">
+                                                        <span class="glyphicon glyphicon-file"></span>
+                                                        
+                                                            Acta 3
+                                                        
+                                                    </a>
+                                                </td>
+                                                <td>06-02-2025 12:23:09</td>
+                                                <td>Non vixente</td>
+                                                <td>
+                                                    <a href ="javascript:mostrarTabla(18,2,1,824580,3)" title=".pdf">
+                                                        Formato&nbsp;.pdf&nbsp;
+                                                    </a>
+                                                    <span>(443.97 KB)</span>
+                                                </td>
+                                            </tr>
+                                            
+                                            
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    
+                    
+                
+                
+            </div>
+        </div>   
+    
+              
+        <div class="panel panel-pcpg">
+            <div class="panel-heading">
+                <div class="panel-title pcpg-fg-color">Datos da mesa 4</div>
+            </div> 
+            <div class="panel-body">
+                
+                <div class="row">
+                    <dl class="dl-horizontal">
+                        <dt>Acto:</dt>
+                        <dd>
+                            
+                                Acto                            
+                                
+                                
+                                    - Non Público - 
+                                
+                                <span id="span_actoMesa4">Exame documentación adxudicatario</span>
+                            
+                            
+                        </dd>
+                    </dl> 
+                </div> 
+                 
+                
+                
+
+                
+                    <div class="row">
+                        <dl class="dl-horizontal">
+                            <dt>Lugar:</dt>
+                            <dd>
+                                <span class="cAzulOscuro" id="span_lugarMesa4">Axencia Turismo de Galicia</span>
+                            </dd>
+                        </dl> 
+                    </div>
+                
+                        
+                
+                
+                    <div class="row">
+                        <dl class="dl-horizontal">
+                            <dt>Data e hora:</dt>
+                            <dd>
+                                <span class="cAzulOscuro">
+                                    14/02/2025 10:00
+                                </span>
+                            </dd>
+                        </dl> 
+                    </div>
+                
+                
+                 
+                    <div class="row">
+                        <dl class="dl-horizontal">
+                            <dt>Arquivos da mesa:</dt>                            
+                        </dl> 
+                    </div>
+                                         
+                        <div class="row">
+                            <div class="table-responsive table-condensed">
+                                <table class="table" aria-describedby="titulo-modal">
+                                    <thead>
+                                        <tr>                           
+                                            <th scope="col" class="col-sm-3"><a href='#'>Título</a></th>
+                                            <th scope="col" class="col-sm-3"><a href='#' data-toggle="tooltip" class="tooltip-cpg" title="Data e hora de difusión do arquivo">Data</a></th>
+                                            <th scope="col" class="col-sm-3"><a href='#'>Estado</a></th>
+                                            <th scope="col" class="col-sm-3"><a href='#'>Descarga</a></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        
+                                         <!-- Visible --> 
+                                            
+                                                <tr class="novigente">                                        
+                                            
+                                                <td>                                            
+                                                    <a href="javascript:mostrarTabla(18,1,1,824580,4)">
+                                                        <span class="glyphicon glyphicon-file"></span>
+                                                        
+                                                            Acta nº 4
+                                                        
+                                                    </a>
+                                                </td>
+                                                <td>24-02-2025 08:48:03</td>
+                                                <td>Non vixente</td>
+                                                <td>
+                                                    <a href ="javascript:mostrarTabla(18,1,1,824580,4)" title=".pdf">
+                                                        Formato&nbsp;.pdf&nbsp;
+                                                    </a>
+                                                    <span>(348.79 KB)</span>
+                                                </td>
+                                            </tr>
+                                            
+                                            
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    
+                    
+                
+                
+            </div>
+        </div>   
+    
+    <!-- Modal -->
+        <div class="modal fade" tabindex="-1" id="sap-proteccion-datos" role="dialog">
+            <div class="modal-dialog">
+
+                <!-- Modal content-->
+                <div class="modal-content"> 
+                    <div class="modal-header modal-header-primary">
+                        <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                            <span aria-hidden="true" class="white-text">x</span>
+                        </button>
+                        <div class="titulo-modal">INFORMACIÓN BÁSICA SOBRE PROTECCIÓN DE DATOS</div>
+                    </div>
+                    <div class="modal-body">                        
+                        <table class="table table-hover " role="presentation" aria-describedby="titulo-modal">
+                            
+                            <tbody>
+                                <tr>
+                                    <td>Responsable do tratamento</td>
+                                    <td>Xunta de Galicia - Consellería de Facenda e Administración Pública</td>
+                                </tr>
+                                <tr>
+                                    <td>Finalidades do tratamento</td>
+                                <td>Xestionar a súa solicitude de inscrición para asistir a unha mesa virtual dun procedemento da Plataforma de Contratos Públicos de Galicia</td>
+                                </tr>
+                                <tr>
+                                    <td>Lexitimación para o tratamento</td>
+                                    <td>Consentimento da persoa interesada  </td>
+                                </tr>
+                                <tr>
+                                    <td>Destinatarios dos datos</td>
+                                    <td>Non se prevén comunicacións a terceiros </td>
+                                </tr>
+                                <tr>
+                                    <td>Exercicio de dereitos</td>
+                                    <td>
+                                        As persoas interesadas poderán acceder, rectificar e suprimir os seus datos, así como exercitar outros dereitos ou retirar o consentimento segundo se recolle en
+                                        <br>
+                                        <a href="https://www.xunta.gal/exercicio-dos-dereitos">https://www.xunta.gal/exercicio-dos-dereitos</a>	
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td>Contacto delegado/a de protección de datos e máis información</td>
+                                    <td><a href="https://www.xunta.gal/proteccion-datos-persoais">https://www.xunta.gal/proteccion-datos-persoais   </a></td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-default" data-dismiss="modal">Pechar</button>
+                    </div>
+                </div>
+            </div>
+        </div>  
+                    
+          
+
+</div>                         
+                                    
+                                
+                                
+                                    
+
+
+
+
+
+
+
+
+
+
+<div class="tab-pane fade" id="consulta-resolucion">
+    <div class="panel panel-pcpg">
+        <div class="panel-heading">
+            <div class="panel-title pcpg-fg-color">Datos da resolución do procedemento</div>
+        </div>                    
+        <div class="panel-body">
+            <div class="container-fluid">  
+                <div class="row">
+                    <div class="table-responsive table-condensed">
+                        <table class="table" aria-describedby="titulo-modal">
+                            <thead>
+                                <tr>
+                                    <th scope="col" class="th_5"><a href="#">Lote</a></th>
+                                    <th scope="col" class="th_5"><a href="#" class="tooltip-cpg" data-toggle="tooltip" title="Participantes">Part.</a></th>
+                                    <th scope="col" class="th_10"><a href="#">Resolución</a></th>
+                                    <th scope="col" class="th_30"><a href="#">Adxudicatario</a></th>
+                                    <th scope="col" class="th_10 text-center"><a href="#">Importe</a></th>
+                                    <th scope="col" class="th_10"><a href="#">Data difusión</a></th>
+                                    <th scope="col" class="th_5"><a href="#">Prazo de execución</a></th>
+                                    <th scope="col" class="th_5"><a href="#">Recurso/ Prazo</a></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                            
+                                
+                                <tr>
+                                            
+                                    <td>
+                                        
+                                        _
+                                        
+                                    </td>
+                                    <td>
+                                       
+                                        
+                                            
+                                            _
+                                            
+                                        
+                                    </td>
+                                    <td>   
+                                        
+                                        
+                                        
+
+                                        <span class="tooltip-cpg" data-toggle="tooltip" title="Anulado / Desestimado">Anulado / Desestimado</span>
+
+                                        
+                                    </td>
+                                    <td>
+                                        
+                                
+                                    
+                                  
+                                
+                                </td>                    
+                                <td class="text-right">
+                                    0,00 &#8364;
+                                </td>                                                            
+                                <td>                                            
+                                    
+                                    <a data-toggle="tooltip" class="tooltip-cpg enlace_sin_css" title="Data e hora de difusión">
+                                        26-02-2025 09:13:25
+                                    </a>
+                                    
+                                    <a class="popover-html" data-toggle="popover" title="Selo: PR RWEB01 2025/392811" data-content="Código de anotación no Rexistro Electrónico da Xunta de Galicia (REXEL) que da fe do momento no que esta operación foi publicada en Contratos Públicos de Galicia (CPG)">
+                                        <span class="glyphicon glyphicon-info-sign"></span>
+                                    </a>
+                                </td>
+                                <td>
+                                    
+                                </td>
+                                <td class='text-center'>
+                                    
+                                </td>
+                                </tr>
+                            
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                 <!-- SI NO ES CONTRATO MENOR -->            
+                    <div class="row">
+                        
+                            <div class="panel panel-consulta">
+                                <div class="panel-heading">
+                                    <div class="row vertical-align nopadding">
+                                        <div class="col-sm-10">
+                                            Órgano competente para resolver o recurso
+                                        </div>
+                                        
+                                    </div>
+                                </div>
+                                <div class="panel-body">                                    
+                                    <div class="row">
+                                        <div class="col-sm-6">
+                                            <dl class="dl-horizontal">
+                                                <dt>Órgano:</dt>
+                                                <dd>
+                                                    Axencia Turismo de Galicia
+                                                </dd>
+                                            </dl>
+                                        </div>
+                                        <div class="col-sm-6">
+                                            <dl class="dl-horizontal">
+                                                <dt>Enderezo:</dt>
+                                                <dd>
+                                                    Estrada Santiago-Noia Km 3 (A Barcia)
+                                                </dd>
+                                            </dl>  
+                                        </div>
+                                        <div class="col-sm-6">
+                                            <dl class="dl-horizontal">
+                                                <dt>Localidade:</dt>
+                                                <dd>
+                                                    Santiago de Compostela
+                                                </dd>
+                                            </dl>
+                                        </div>
+                                        <div class="col-sm-6">
+                                            <dl class="dl-horizontal">
+                                                <dt>C.P.:</dt>
+                                                <dd>
+                                                    15897
+                                                </dd>
+                                            </dl>
+                                        </div>
+                                        <div class="col-sm-6">
+                                            <dl class="dl-horizontal">
+                                                <dt>Teléfono:</dt>
+                                                <dd>
+                                                    981547499
+                                                </dd>
+                                            </dl>
+                                        </div>
+                                        <div class="col-sm-6">
+                                            <dl class="dl-horizontal">
+                                                <dt>Fax:</dt>
+                                                <dd>
+                                                    
+                                                </dd>
+                                            </dl>
+                                        </div>
+                                        <div class="col-sm-6">
+                                            <dl class="dl-horizontal">
+                                                <dt>Correo electrónico:</dt>
+                                                <dd>
+                                                    
+                                                    <a href='mailto:contratacion-turismo.cpr@xunta.es?Subject=PCPG: Axencia Turismo de Galicia (ID: 824580)'>contratacion-turismo.cpr@xunta.es</a>
+                                                    
+                                                </dd>
+                                            </dl>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>                             
+                        
+                    </div>
+                
+                
+            </div>
+        </div>
+    </div> 
+</div>
+
+<!-- Modal -->
+<div class="modal fade" tabindex="-1" id="ventanaModalMultAdx" role="dialog">
+    <div class="modal-dialog">
+        <div class="modal-content"> 
+            <div class="modal-header modal-header-primary">
+                <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                    <span aria-hidden="true" class="white-text">x</span>
+                </button>
+                <div class="titulo-modal">Datos adxudicación</div>                
+            </div>
+            <div class="modal-body">                                                                                    
+                <div class="row">
+                    <dl class="dl-horizontal">
+                        <dt>Lote:</dt>
+                        <dd id='multAdxLote'></dd>
+                    </dl>
+                </div>
+                <div class="row">
+                    <dl class="dl-horizontal">
+                        <dt>Resolución:</dt>
+                        <dd id='multAdxResolucion'></dd>
+                    </dl>
+                </div>
+                <div class="row">
+                    <dl class="dl-horizontal">
+                        <dt>Importe:</dt>
+                        <dd id='multAdxImporte'></dd>
+                    </dl>
+                </div>          
+                <div class="row">
+                    <dl class="dl-horizontal">
+                        <dt>Selo:</dt>
+                        <dd id='multAdxSalida'></dd>
+                    </dl>
+                </div>                                                            
+                <div class="row">
+                    <div class="table-responsive">
+                        <table class="table table-hover" aria-describedby="titulo-modal">
+                            <thead>
+                                <tr>
+                                    <th scope="col">Adxudicatario</th>
+                                    <th scope="col">NIF</th>
+                            </tr>
+                            </thead>
+                            <tbody id="tBodyMultAdx"></tbody>
+                        </table>
+                    </div>
+                </div>
+                <div class="row">   
+                    <span class="glyphicon glyphicon-menu-hamburger"></span>                         
+                    <span>ID publicación: 824580</span>
+                </div>
+                <div class="row hidden" id='mult_adx_lote'>   
+                    <span class="glyphicon glyphicon-menu-hamburger"></span>                         
+                    <span>Lote: </span><span id='mult_adx_lote_id'></span>                    
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-default" data-dismiss="modal">Pechar</button>
+            </div>    
+        </div>
+    </div>
+</div>                              
+
+<div class="modal fade" tabindex="-1" id="ventanaModalLicitadores" role="dialog">
+    <div class="modal-dialog">
+        <!-- Modal content-->
+        <div class="modal-content"> 
+            <div class="modal-header modal-header-primary">
+                <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                    <span aria-hidden="true" class="white-text">x</span>
+                </button>
+                <div class="titulo-modal">Relación de licitadores presentados</div>                
+            </div>
+            <div class="modal-body">                                                                                                                                           
+                <div class="row">
+                    <div class="table-responsive">
+                        <table class="table table-hover" aria-describedby="titulo-modal">
+                            <thead>
+                                <tr>
+                                    <th scope="col">Lote</th>
+                                    <th scope="col">NIF</th>
+                                    <th scope="col">Nome</th>
+                                    
+                                </tr>
+                            </thead>
+                            <tbody>
+                            
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                <div class="row">   
+                    <span class="glyphicon glyphicon-menu-hamburger"></span>                         
+                    <span>ID publicación: 824580</span>
+                </div>
+                <div class="row hidden" id='lic_lote'>   
+                    <span class="glyphicon glyphicon-menu-hamburger"></span>                         
+                    <span>Lote: </span><span id='lic_lote_id'></span>                    
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-default" data-dismiss="modal">Pechar</button>
+            </div>    
+        </div>
+    </div>
+</div>                             
+
+<div class="modal fade" tabindex="-1" id="ventanaModalDiligencia" role="dialog">
+    <div class="modal-dialog">
+        <!-- Modal content-->
+        <div class="modal-content">   
+            <div class="modal-header modal-header-primary">
+                <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                    <span aria-hidden="true" class="white-text">x</span>
+                </button>
+                <div class="titulo-modal">Dilixencia de anulación da resolución</div>                
+            </div>
+            <div class="modal-body">                                                                                                                                           
+                <div class="row">
+                    <div class="table-responsive">
+                        <table class="table table-hover" aria-describedby="titulo-modal">
+                            <thead>
+                                <tr>
+                                    <th scope="col">Descrición</th>
+                            <th scope="col">Data e hora</th>
+                            <th scope="col">Selo</th>
+                            <th scope="col">Anexo</th>
+                            </tr>
+                            </thead>
+                            <tbody id="dili_body"></tbody>                            
+                        </table>
+                        <div id="anexo"></div>
+                    </div>
+                </div>
+                <div class="row">   
+                    <span class="glyphicon glyphicon-menu-hamburger"></span>                         
+                    <span>ID publicación: 824580</span>
+                </div>
+                <div class="row hidden" id='dilig_lote'>   
+                    <span class="glyphicon glyphicon-menu-hamburger"></span>                         
+                    <span>Lote: </span><span id='dilig_lote_id'></span>                    
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-default" data-dismiss="modal">Pechar</button>
+            </div>    
+        </div>
+    </div>
+</div>                                                                           
+                                    
+                                    
+                                    
+                                    
+
+
+
+
+
+
+
+
+<div class="tab-pane fade" id="consulta-execucion">
+   
+    
+                                        
+    
+             
+    <div class="modal fade" tabindex="-1" id="ventanaModalDiligEjecucion" role="dialog">
+        <div class="modal-dialog">
+            <div class="modal-content"> 
+                <div class="modal-header modal-header-primary">
+                    <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                        <span aria-hidden="true" class="white-text">x</span>
+                    </button>
+                    <div class="titulo-modal">Dilixencia de anulación de execución</div>                
+                </div>
+                <div class="modal-body">                                                                                                                                           
+                    <div class="row">
+                        <div class="table-responsive">
+                            <table class="table table-hover" aria-describedby="titulo-modal">
+                                <thead>
+                                    <tr>
+                                        <th scope="col">Descrición</th>
+                                        <th scope="col">Data e hora</th> 
+                                        <th scope="col">Anexo</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="dili_ejecucion_body"></tbody>                            
+                            </table>
+                            <div id="anexoContrato"></div>
+                        </div>
+                    </div>
+                    <div class="row">   
+                        <span class="glyphicon glyphicon-menu-hamburger"></span>                         
+                        <span>ID publicación: 824580</span>
+                    </div>
+                    <div class="row hidden" id='dilig_ejecucion_lote'>   
+                        <span class="glyphicon glyphicon-menu-hamburger"></span>                         
+                        <span>Lote: </span><span id='dilig_ejecucion_lote_id'></span>                    
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-default" data-dismiss="modal">Pechar</button>
+                </div>
+            </div>
+        </div>
+    </div>                                      
+    
+</div>
+                                 
+
+                                
+
+
+
+
+
+
+
+<div class="tab-pane fade" id="consulta-historico">
+    <div class="panel-group">
+        <div class="panel panel-pcpg">
+            <div class="panel-heading">
+                <div class="panel-title pcpg-fg-color">
+                    Histórico
+                </div>
+            </div>
+            <div class="panel-body">
+                <div class="table-responsive">
+                    <table class="table" id="tabHistorico" aria-describedby="titulo-modal">
+                        <thead>
+                            <tr>
+                                <th scope="col">Data</th>
+                                <th scope="col">Cambio</th>
+                            </tr>
+                        </thead>
+                        <tbody>                    
+                            
+                                <tr>
+                                    <td>
+                                        26-02-2025 09:13
+                                    </td>
+                                    <td>
+                                        Engadida adxudicación
+                                    </td>
+                                </tr>
+                            
+                                <tr>
+                                    <td>
+                                        24-02-2025 13:52
+                                    </td>
+                                    <td>
+                                        Modificadas Observacións
+                                    </td>
+                                </tr>
+                            
+                                <tr>
+                                    <td>
+                                        24-02-2025 13:51
+                                    </td>
+                                    <td>
+                                        Anulado arquivo da mesa4 ' Acta nº 4                                         ' 
+                                    </td>
+                                </tr>
+                            
+                                <tr>
+                                    <td>
+                                        24-02-2025 08:49
+                                    </td>
+                                    <td>
+                                        Modificado modalidade da mesa, apertura 4
+                                    </td>
+                                </tr>
+                            
+                                <tr>
+                                    <td>
+                                        24-02-2025 08:48
+                                    </td>
+                                    <td>
+                                        Modificado modalidade da mesa, apertura 4
+                                    </td>
+                                </tr>
+                            
+                                <tr>
+                                    <td>
+                                        24-02-2025 08:48
+                                    </td>
+                                    <td>
+                                        Engadido arquivo da mesa4 ' Acta nº 4                                         ' 
+                                    </td>
+                                </tr>
+                            
+                                <tr>
+                                    <td>
+                                        24-02-2025 08:47
+                                    </td>
+                                    <td>
+                                        Engadida publicación nova mesa, apertura 4
+                                    </td>
+                                </tr>
+                            
+                                <tr>
+                                    <td>
+                                        06-02-2025 12:23
+                                    </td>
+                                    <td>
+                                        Modificado modalidade da mesa, apertura 3
+                                    </td>
+                                </tr>
+                            
+                                <tr>
+                                    <td>
+                                        06-02-2025 12:23
+                                    </td>
+                                    <td>
+                                        Modificado modalidade da mesa, apertura 2
+                                    </td>
+                                </tr>
+                            
+                                <tr>
+                                    <td>
+                                        06-02-2025 12:23
+                                    </td>
+                                    <td>
+                                        Anulado arquivo da mesa3 ' Acta 3                                            ' 
+                                    </td>
+                                </tr>
+                            
+                                <tr>
+                                    <td>
+                                        06-02-2025 12:23
+                                    </td>
+                                    <td>
+                                        Engadido arquivo da mesa3 ' Acta 3                                            ' 
+                                    </td>
+                                </tr>
+                            
+                                <tr>
+                                    <td>
+                                        06-02-2025 12:23
+                                    </td>
+                                    <td>
+                                        Engadido arquivo da mesa3 ' Acta 3                                            ' 
+                                    </td>
+                                </tr>
+                            
+                                <tr>
+                                    <td>
+                                        06-02-2025 09:31
+                                    </td>
+                                    <td>
+                                        Modificado modalidade da mesa, apertura 3
+                                    </td>
+                                </tr>
+                            
+                                <tr>
+                                    <td>
+                                        06-02-2025 09:31
+                                    </td>
+                                    <td>
+                                        Modificado modalidade da mesa, apertura 2
+                                    </td>
+                                </tr>
+                            
+                                <tr>
+                                    <td>
+                                        06-02-2025 09:27
+                                    </td>
+                                    <td>
+                                        Engadida publicación nova mesa, apertura 3
+                                    </td>
+                                </tr>
+                            
+                                <tr>
+                                    <td>
+                                        06-02-2025 09:27
+                                    </td>
+                                    <td>
+                                        Modificado modalidade da mesa, apertura 2
+                                    </td>
+                                </tr>
+                            
+                                <tr>
+                                    <td>
+                                        06-02-2025 09:26
+                                    </td>
+                                    <td>
+                                        Modificado modalidade da mesa, apertura 2
+                                    </td>
+                                </tr>
+                            
+                                <tr>
+                                    <td>
+                                        06-02-2025 09:26
+                                    </td>
+                                    <td>
+                                        Engadido arquivo da mesa2 ' Acta sobre B                                      ' 
+                                    </td>
+                                </tr>
+                            
+                                <tr>
+                                    <td>
+                                        06-02-2025 09:25
+                                    </td>
+                                    <td>
+                                        Engadida publicación nova mesa, apertura 2
+                                    </td>
+                                </tr>
+                            
+                                <tr>
+                                    <td>
+                                        06-02-2025 09:24
+                                    </td>
+                                    <td>
+                                        Engadido arquivo da mesa1 ' Acta sobre A                                      ' 
+                                    </td>
+                                </tr>
+                            
+                                <tr>
+                                    <td>
+                                        06-02-2025 09:24
+                                    </td>
+                                    <td>
+                                        Engadida publicación nova mesa, apertura 1
+                                    </td>
+                                </tr>
+                            
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+            </main>             
+            
+
+
+
+
+
+
+<aside> 
+    <div id="menuFooter" class="bg-gray-light">
+        <div class="page-max-width padding-top-m padding-bottom-m5"> 
+            <div class="row"> 
+                <div id="menuFooterI" class="col-sm-9"> 
+                    <div class="row">
+                        <div class="col-sm-4 col-xs-12 mod-menu-grupo"> 
+                            <h3 class="titulo" >
+                                <div class="hidden-xs">
+                                    Atención aos licitadores
+                                </div>
+                                <div class="visible-xs" data-toggle="collapse" data-target="#mas-antencion">
+                                    Atención aos licitadores
+                                </div>
+                            </h3>
+                            <nav aria-label='Atención aos licitadores'>
+                                <ul id="mas-antencion" class="list-unstyled margin-left-0">                                                                             
+                                    <li> 
+                                        <a href="preguntas.jsp?lang=gl" rel="noopener">Preguntas frecuentes</a> 
+                                    </li>
+                                    <li> 
+                                        <a href="preguntas.jsp?lang=gl&wizard=5" rel="noopener">Dúbidas sobre un procedemento</a> 
+                                    </li>
+                                </ul> 
+                            </nav>
+                        </div> 
+                        <div class="col-sm-4 col-xs-12 mod-menu-grupo"> 
+                            <h3 class="titulo" >
+                                <div class="hidden-xs">
+                                    Trámites e servizos
+                                </div>
+                                <div class="visible-xs" data-toggle="collapse" data-target="#mas-tramites">
+                                    Trámites e servizos
+                                </div>
+                            </h3>
+                            <nav aria-label='Trámites e servizos'>
+                                <ul id="mas-tramites" class="list-unstyled margin-left-0">                                         
+                                    <li> 
+                                        <a href="https://sede.xunta.gal/portada">Sede electrónica</a> 
+                                    </li> 
+                                    <li> 
+                                        <a href="http://www.conselleriadefacenda.es/sicon/">Facturación e licitación electrónica</a> 
+                                    </li>
+                                    <li> 
+                                        <a href="http://www.conselleriadefacenda.es/areas-tematicas/patrimonio/rexistro-xeral-de-contratistas/servizos-telematicos">Rexistro Xeral de Contratistas de Galicia</a> 
+                                    </li>                                        
+                                </ul> 
+                            </nav>
+                        </div> 
+                        <div class="col-sm-4  col-xs-12  mod-menu-grupo"> 
+                            <h3 class="titulo" >
+                                <div class="hidden-xs">
+                                    Directo a
+                                </div>
+                                <div class="visible-xs" data-toggle="collapse" data-target="#mas-directo">
+                                    Directo a
+                                </div>
+                            </h3>
+                            <nav aria-label='Directo a'>
+                                <ul id="mas-directo" class="list-unstyled margin-left-0">                                                                                 
+                                    <li>
+                                        <a href="https://www.xunta.gal/diario-oficial-galicia/">Diario Oficial de Galicia</a>
+                                    </li> 
+                                    <li> 
+                                        <a href="http://contrataciondelestado.es/wps/portal/plataforma">Plataforma de contración do Estado</a> 
+                                    </li>  
+                                </ul>
+                            </nav>
+                        </div>    
+                    </div>       
+                </div> 
+
+                <div id="menuFooterD" class="col-sm-2"> 
+                    <ul class="list-unstyled row">                                                 
+                        <li class="col-xs-6 col-sm-12"> 
+                            <a href="subscricionRSS.jsp?lang=gl" class="media"> 
+                                <span class="media-left media-middle">
+                                    <img src="img/iconos/ico_rss.svg?v=20260428144224577" alt="" width="auto" height="auto">
+                                </span> 
+                                <span class="media-body media-middle">RSS</span> 
+                            </a>
+                        </li> 
+                        <li class="col-xs-6 col-sm-12"> 
+                          <a id="linkFeder" class="tooltip-cpg" data-toggle="tooltip" title="Ir a Fondo Europeo de desenvolvemento rexional" href="http://ec.europa.eu/dgs/regional_policy/index_es.htm" target="_blank" rel="noopener noreferrer"> 
+                            <img class="img-responsive" alt="FEDER" src="img/logos/feder.svg?v=20260428144224577" width="auto" height="auto"> 
+                          </a>    
+                        </li> 
+                    </ul> 
+                </div> 
+                <div id="menuFooterH" class="col-sm-1"> 
+                  <a id="linkENS" class="tooltip-cpg" data-toggle="tooltip" title="Certificados ENS" href="https://gobernanza.ccn-cert.cni.es/amparo/API/public/certificaciones/8051/download/7014" target="_blank" rel="noopener noreferrer"> 
+                    <img class="img-responsive ens" alt="ENS" src="img/logos/logo_ENS.png" width="auto" height="auto"> 
+                  </a>   
+                </div> 
+            </div>                          
+        </div> 
+    </div> 
+</aside>
+
+                
+            
+
+
+
+
+
+
+
+<footer id="pe-paxina">
+    <div id="info-portal" class="page-max-width">	
+        <div class="row">
+            <div id="logo-xunta-pe" class="col-xs-12 col-sm-2 col-md-2">
+                <a href="http://www.xunta.gal/" data-toggle="tooltip" title="Ir a Xunta de Galicia" class="tooltip-cpg">
+                    <img src="img/logos/logo-xunta-pe.svg?v=20260428144224577" alt="Xunta de Galicia" width="auto" height="auto">
+                </a>
+            </div>
+                
+            <div class="col-xs-6 col-sm-2 col-sm-push-8 col-md-2 col-md-push-8">	    	</div>                 
+
+            <div id="info-pe" class="col-xs-12 col-sm-7 col-sm-pull-1 col-md-6 col-md-pull-2" style="text-align: center;> 
+                <p><img class="logocc" src="img/iconos/logo_cc_.svg?v=20260428144224577" alt="CC" width="auto" height="auto"> Xunta de Galicia. Información mantida e publicada na internet pola Xunta de Galicia</p>
+
+                <div>
+                    <div>
+                        <p>
+                            <a href="https://012.xunta.gal/">Atención á cidadanía</a>
+                            <span> - </span>
+                            <a href="accesibilidad.jsp?lang=gl">Accesibilidade</a>
+                            <span> - </span>
+                            <a href="avisoLegal.jsp?lang=gl">Aviso legal</a>
+                            <span> - </span>
+                            <a href="https://www.contratosdegalicia.gal/mapa.jsp?lang=gl">Mapa do portal</a>
+                        </p>
+                    </div>
+                </div>
+                      
+            </div>
+           <div id="info-pe" class="col-xs-12 col-sm-2 col-md-2">
+                <a href="https://www.caminodesantiago.gal/es/inicio" data-toggle="tooltip" title="Ir a Xunta de Galicia" class="tooltip-cpg">
+                    <img src="img/logos/xacobeo2027.png" alt="Xunta de Galicia" width="auto" height="auto"  class="xacobeo">
+                </a>
+            </div>             
+        </div>
+    </div>
+</footer>        
+            
+        </div>
+            
+            <div class="modal fade" tabindex="-1" id="mesa_virtual_correcta" role="dialog">
+            <div class="modal-dialog">
+
+                <!-- Modal content-->
+                <div class="modal-content"> 
+                    <div class="modal-header modal-header-primary">
+                        <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                            <span aria-hidden="true" class="white-text">x</span>
+                        </button>
+                        <div class="titulo-modal">INSCRICIÓN Á MESA DO PROCEDEMENTO</div>
+                    </div>
+                    <div class="modal-body">                        
+                        <table class="table table-hover " role="presentation" aria-describedby="titulo-modal">
+                            
+                            <tbody>
+                                <tr style="text-align: center">
+                                    <td id="tdCorrecto"></td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-default" data-dismiss="modal">Pechar</button>
+                    </div>
+                </div>
+            </div>
+        </div>  
+                    
+        <div class="modal fade" tabindex="-1" id="mesa_virtual_incorrecta" role="dialog">
+            <div class="modal-dialog">
+
+                <!-- Modal content-->
+                <div class="modal-content"> 
+                    <div class="modal-header modal-header-primary">
+                        <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                            <span aria-hidden="true" class="white-text">x</span>
+                        </button>
+                        <div class="titulo-modal">INSCRICIÓN Á MESA DO PROCEDEMENTO</div>
+                    </div>
+                    <div class="modal-body">                        
+                        <table class="table table-hover " role="presentation" aria-describedby="titulo-modal">
+                            
+                            <tbody>
+                                <tr>
+                                    <td><div class="alert alert-danger">Produciuse un erro durante a inscripción, por favor revise os datos e volva a intentalo.</div></td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-default" data-dismiss="modal">Pechar</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+    </body>
+</html>
+
