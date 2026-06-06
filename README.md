@@ -57,3 +57,6 @@ A base de datos `contratos.sqlite` créase no cartafol de datos do usuario
 ## Licenzas de terceiros
 
 A fonte **Inter** distribúese baixo a SIL Open Font License (ver `assets/fonts/Inter-OFL.txt`).
+
+As iconas **Lucide** (`assets/fonts/lucide.ttf`) distribúense baixo a licenza ISC
+(<https://lucide.dev/license>).

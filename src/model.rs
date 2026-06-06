@@ -1,7 +1,13 @@
 //! Modelos de datos da aplicación.
 
+use chrono::{Datelike, Local};
 use serde::Deserialize;
 use std::collections::BTreeMap;
+
+/// Ano actual segundo o reloxo do sistema.
+pub fn current_year() -> i32 {
+    Local::now().year()
+}
 
 /// Grupos de estado tal e como os amosa a web (catro caixas de selección),
 /// cada un mapeado aos códigos numéricos que entende `resultadoIndex.jsp`.
@@ -59,7 +65,7 @@ impl Default for Filters {
     fn default() -> Self {
         Filters {
             estados: EstadoGroup::ALL.to_vec(),
-            year: String::new(),
+            year: current_year().to_string(),
             organo: String::new(),
             asunto: String::new(),
             tipo_contrato: String::new(),
@@ -163,6 +169,24 @@ pub fn is_estado_terminal(estado: &str) -> bool {
     TERMINAIS.iter().any(|t| e.contains(t))
 }
 
+/// Normaliza texto para buscas: minúsculas e sen diacríticos (acentos, til do
+/// ñ, diérese…), de xeito que a busca sexa insensible a maiúsculas e acentos.
+pub fn normalize_search(s: &str) -> String {
+    s.chars()
+        .flat_map(char::to_lowercase)
+        .map(|c| match c {
+            'á' | 'à' | 'ä' | 'â' | 'ã' => 'a',
+            'é' | 'è' | 'ë' | 'ê' => 'e',
+            'í' | 'ì' | 'ï' | 'î' => 'i',
+            'ó' | 'ò' | 'ö' | 'ô' | 'õ' => 'o',
+            'ú' | 'ù' | 'ü' | 'û' => 'u',
+            'ñ' => 'n',
+            'ç' => 'c',
+            other => other,
+        })
+        .collect()
+}
+
 /// Normaliza un importe en formato galego/español (`1.000.000,00 €`) a `f64`.
 pub fn parse_importe(s: &str) -> Option<f64> {
     let cleaned: String = s
@@ -213,6 +237,16 @@ mod tests {
         assert_eq!(parse_importe("500,00"), Some(500.0));
         assert_eq!(parse_importe("_"), None);
         assert_eq!(parse_importe(""), None);
+    }
+
+    #[test]
+    fn normalizacion_busca() {
+        assert_eq!(normalize_search("Concello da Coruña"), "concello da coruna");
+        assert_eq!(normalize_search("ÓRGANO"), "organo");
+        assert_eq!(normalize_search("Educación"), "educacion");
+        // Insensible a maiúsculas e acentos: a consulta normalizada atópase no texto.
+        assert!(normalize_search("Vehículos eléctricos").contains(&normalize_search("ELÉCTRIC")));
+        assert!(normalize_search("Adxudicación").contains(&normalize_search("dicacion")));
     }
 
     #[test]

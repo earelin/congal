@@ -1,9 +1,11 @@
 //! Persistencia en SQLite (rusqlite, bundled).
 
 use crate::model::{
-    ContractDetail, ContractSummary, LocalFilters, LocalRow, Resolucion, parse_importe,
+    ContractDetail, ContractSummary, LocalFilters, LocalRow, Resolucion, normalize_search,
+    parse_importe,
 };
 use anyhow::Result;
+use rusqlite::functions::FunctionFlags;
 use rusqlite::{Connection, params};
 use std::path::Path;
 
@@ -24,6 +26,17 @@ impl Db {
         let conn = Connection::open(path)?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
+        // Función SQL `nrm(x)`: normaliza texto (minúsculas, sen acentos) para
+        // buscas insensibles a maiúsculas e acentos.
+        conn.create_scalar_function(
+            "nrm",
+            1,
+            FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
+            |ctx| {
+                let s = ctx.get::<String>(0)?;
+                Ok(normalize_search(&s))
+            },
+        )?;
         let db = Db { conn };
         db.init_schema()?;
         Ok(db)
@@ -270,26 +283,26 @@ impl Db {
         );
         let mut args: Vec<String> = Vec::new();
         if !f.texto.trim().is_empty() {
-            sql.push_str(" AND (LOWER(c.asunto) LIKE ?  OR LOWER(c.referencia) LIKE ?)");
-            let like = format!("%{}%", f.texto.to_lowercase());
+            sql.push_str(" AND (nrm(c.asunto) LIKE ?  OR nrm(c.referencia) LIKE ?)");
+            let like = format!("%{}%", normalize_search(&f.texto));
             args.push(like.clone());
             args.push(like);
         }
         if !f.organismo.trim().is_empty() {
-            sql.push_str(" AND LOWER(c.organismo) LIKE ?");
-            args.push(format!("%{}%", f.organismo.to_lowercase()));
+            sql.push_str(" AND nrm(c.organismo) LIKE ?");
+            args.push(format!("%{}%", normalize_search(&f.organismo)));
         }
         if !f.estado.trim().is_empty() {
-            sql.push_str(" AND LOWER(c.estado) LIKE ?");
-            args.push(format!("%{}%", f.estado.to_lowercase()));
+            sql.push_str(" AND nrm(c.estado) LIKE ?");
+            args.push(format!("%{}%", normalize_search(&f.estado)));
         }
         if !f.year.trim().is_empty() {
             sql.push_str(" AND c.data_publicacion LIKE ?");
             args.push(format!("%{}%", f.year.trim()));
         }
         if !f.adxudicatario.trim().is_empty() {
-            sql.push_str(" AND LOWER(r.adxudicatario) LIKE ?");
-            args.push(format!("%{}%", f.adxudicatario.to_lowercase()));
+            sql.push_str(" AND nrm(r.adxudicatario) LIKE ?");
+            args.push(format!("%{}%", normalize_search(&f.adxudicatario)));
         }
         sql.push_str(" ORDER BY c.data_publicacion DESC, c.id DESC LIMIT 5000");
 

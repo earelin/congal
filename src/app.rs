@@ -1,4 +1,5 @@
-//! Interface gráfica (egui) con dúas áreas: scraper e traballo local.
+//! Interface gráfica (egui): listado de contratos importados como pantalla
+//! principal, e importación de datos en diálogos modais.
 
 use crate::db::{Db, DbStats};
 use crate::model::{
@@ -9,23 +10,22 @@ use crate::worker::{Command, Event, Worker};
 use egui::{Align, Color32, Layout, RichText, ScrollArea};
 use egui_extras::{Column, TableBuilder};
 
-#[derive(PartialEq, Eq, Clone, Copy)]
-enum Tab {
-    Scraper,
-    Local,
-}
-
 pub struct App {
     worker: Worker,
     db: Db,
     dark: bool,
-    tab: Tab,
 
     options: FilterOptions,
     options_loaded: bool,
-    organo_filtro: String,
+    /// Texto de busca de cada ComboBox, indexado polo seu id.
+    combo_filtros: std::collections::HashMap<String, String>,
 
+    /// Filtros de importación (formulario do modal).
     filters: Filters,
+    /// Visibilidade do modal de selección de filtros de importación.
+    show_import_dialog: bool,
+    /// Visibilidade do modal de progreso da importación.
+    show_progress_dialog: bool,
 
     busy: bool,
     progress: Option<(usize, usize)>,
@@ -57,11 +57,12 @@ impl App {
             worker,
             db,
             dark,
-            tab: Tab::Scraper,
             options: FilterOptions::default(),
             options_loaded: false,
-            organo_filtro: String::new(),
+            combo_filtros: std::collections::HashMap::new(),
             filters: Filters::default(),
+            show_import_dialog: false,
+            show_progress_dialog: false,
             busy: false,
             progress: None,
             status: "Listo.".to_string(),
@@ -139,10 +140,12 @@ impl eframe::App for App {
         let ctx = ui.ctx().clone();
         self.drain_events(&ctx);
         self.top_bar(ui);
-        self.status_bar(ui);
-        match self.tab {
-            Tab::Scraper => self.scraper_tab(ui),
-            Tab::Local => self.local_tab(ui),
+        self.main_view(ui);
+        if self.show_import_dialog {
+            self.import_dialog(&ctx);
+        }
+        if self.show_progress_dialog {
+            self.progress_dialog(&ctx);
         }
     }
 }
@@ -155,19 +158,22 @@ impl App {
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
                     ui.add_space(4.0);
-                    ui.heading("Contratos Públicos de Galicia");
+                    ui.heading("Congal");
                     ui.add_space(16.0);
 
-                    // Segmented control.
-                    ui.scope(|ui| {
-                        let seg = |ui: &mut egui::Ui, label: &str, tab: Tab, cur: &mut Tab| {
-                            if ui.selectable_label(*cur == tab, RichText::new(label)).clicked() {
-                                *cur = tab;
-                            }
-                        };
-                        seg(ui, "  Scraper  ", Tab::Scraper, &mut self.tab);
-                        seg(ui, "  Traballo local  ", Tab::Local, &mut self.tab);
-                    });
+                    let importar = ui.add_enabled(
+                        !self.busy,
+                        egui::Button::new(theme::icon_label(
+                            ui,
+                            theme::icons::ARROW_BIG_DOWN,
+                            "Importar datos",
+                            Color32::WHITE,
+                        ))
+                        .fill(theme::accent(self.dark)),
+                    );
+                    if importar.clicked() {
+                        self.show_import_dialog = true;
+                    }
 
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         let icon = if self.dark { "☀ Claro" } else { "🌙 Escuro" };
@@ -176,146 +182,195 @@ impl App {
                             theme::apply(ui.ctx(), self.dark);
                         }
                         ui.separator();
-                        ui.label(
-                            RichText::new(format!(
-                                "BD: {} contratos · {} con detalle",
-                                self.stats.total, self.stats.con_detalle
-                            ))
-                            .small()
-                            .color(Color32::GRAY),
+                        let mut info = format!(
+                            "BD: {} contratos · {} con detalle",
+                            self.stats.total, self.stats.con_detalle
                         );
+                        if let Some(u) = &self.stats.ultima_sync {
+                            info.push_str(&format!(" · última importación: {u}"));
+                        }
+                        ui.label(RichText::new(info).small().color(Color32::GRAY));
                     });
                 });
             });
     }
 
-    fn status_bar(&mut self, ui: &mut egui::Ui) {
-        egui::Panel::bottom("statusbar")
-            .exact_size(30.0)
-            .show_inside(ui, |ui| {
-                ui.horizontal(|ui| {
-                    if self.busy {
-                        ui.spinner();
-                    }
-                    ui.label(RichText::new(&self.status).small());
-                    if let Some((done, total)) = self.progress {
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            ui.add(
-                                egui::ProgressBar::new(done as f32 / total.max(1) as f32)
-                                    .desired_width(220.0)
-                                    .text(format!("{done}/{total}")),
-                            );
-                        });
-                    }
-                });
-            });
-    }
-
-    fn scraper_tab(&mut self, ui: &mut egui::Ui) {
-        egui::Panel::left("filtros")
-            .resizable(true)
-            .default_size(320.0)
-            .show_inside(ui, |ui| {
-                ScrollArea::vertical().show(ui, |ui| {
-                    ui.add_space(6.0);
-                    ui.heading("Filtros");
-                    ui.add_space(6.0);
-
-                    ui.label(RichText::new("Estado").strong());
-                    for g in EstadoGroup::ALL {
-                        let mut on = self.filters.estados.contains(&g);
-                        if ui.checkbox(&mut on, g.label()).changed() {
-                            if on {
-                                self.filters.estados.push(g);
-                            } else {
-                                self.filters.estados.retain(|x| *x != g);
-                            }
-                        }
-                    }
-                    ui.add_space(8.0);
-
-                    ui.label(RichText::new("Ano").strong());
-                    ui.text_edit_singleline(&mut self.filters.year);
-                    ui.add_space(8.0);
-
-                    ui.label(RichText::new("Busca textual (obxecto)").strong());
-                    ui.text_edit_singleline(&mut self.filters.asunto);
-                    ui.add_space(8.0);
-
-                    ui.label(RichText::new("Órgano de contratación").strong());
-                    combo_codigo(
-                        ui,
-                        "organo",
-                        &mut self.filters.organo,
-                        &self.options.organos,
-                        &mut self.organo_filtro,
-                    );
-                    ui.add_space(8.0);
-
-                    ui.label(RichText::new("Tipo de contrato").strong());
-                    combo_codigo(ui, "tc", &mut self.filters.tipo_contrato, &self.options.tipos_contrato, &mut String::new());
-                    ui.add_space(4.0);
-                    ui.label(RichText::new("Tipo de procedemento").strong());
-                    combo_codigo(ui, "tp", &mut self.filters.tipo_procedemento, &self.options.tipos_procedemento, &mut String::new());
-                    ui.add_space(4.0);
-                    ui.label(RichText::new("Tipo de tramitación").strong());
-                    combo_codigo(ui, "tt", &mut self.filters.tipo_tramitacion, &self.options.tipos_tramitacion, &mut String::new());
-                    ui.add_space(4.0);
-                    ui.label(RichText::new("Sistema de contratación").strong());
-                    combo_codigo(ui, "sc", &mut self.filters.sistema, &self.options.sistemas, &mut String::new());
-                    ui.add_space(4.0);
-                    ui.label(RichText::new("Materia (CPV)").strong());
-                    combo_codigo(ui, "cpv", &mut self.filters.materia, &self.options.materias, &mut String::new());
-
-                    ui.add_space(14.0);
-                    ui.horizontal(|ui| {
-                        let sync = ui.add_enabled(
-                            !self.busy,
-                            egui::Button::new(RichText::new("Sincronizar").color(Color32::WHITE))
-                                .fill(theme::accent(self.dark)),
-                        );
-                        if sync.clicked() {
-                            self.busy = true;
-                            self.status = "Iniciando sincronización…".into();
-                            self.worker.send(Command::Sync(self.filters.clone()));
-                        }
-                        if self.busy && ui.button("Cancelar").clicked() {
-                            self.worker.request_cancel();
-                        }
-                        if ui.button("Limpar").clicked() {
-                            self.filters = Filters::default();
-                        }
-                    });
-
-                    if !self.options_loaded {
-                        ui.add_space(6.0);
-                        ui.label(RichText::new("Cargando opcións de filtro…").small().italics());
-                    }
-                });
-            });
-
-        egui::CentralPanel::default().show_inside(ui, |ui| {
-            ui.add_space(6.0);
-            ui.heading("Sincronización");
+    /// Modal de selección dos filtros de importación.
+    fn import_dialog(&mut self, ctx: &egui::Context) {
+        let modal = egui::Modal::new(egui::Id::new("import_dialog")).show(ctx, |ui| {
+            ui.set_width(720.0);
+            ui.heading("Importar datos");
             ui.label(
-                "Descarga e actualiza contratos. Os contratos xa resoltos non se volven \
-                 descargar; só se actualizan os que seguían en proceso e os novos.",
+                RichText::new(
+                    "Escolle os filtros dos contratos a descargar. Os contratos xa resoltos \
+                     non se volven descargar; só se actualizan os que seguían en proceso e os novos.",
+                )
+                .small()
+                .color(Color32::GRAY),
             );
-            ui.add_space(8.0);
-            if let Some(u) = &self.stats.ultima_sync {
-                ui.label(format!("Última sincronización: {u}"));
+            ui.add_space(10.0);
+
+            ui.columns(2, |cols| {
+                // Columna esquerda: estado, ano e busca textual.
+                let ui = &mut cols[0];
+                ui.label(RichText::new("Estado").strong());
+                for g in EstadoGroup::ALL {
+                    let mut on = self.filters.estados.contains(&g);
+                    if ui.checkbox(&mut on, g.label()).changed() {
+                        if on {
+                            self.filters.estados.push(g);
+                        } else {
+                            self.filters.estados.retain(|x| *x != g);
+                        }
+                    }
+                }
+                ui.add_space(8.0);
+
+                ui.label(RichText::new("Ano").strong());
+                year_combo(ui, &mut self.filters.year);
+                ui.add_space(8.0);
+
+                ui.label(RichText::new("Busca textual (obxecto)").strong());
+                text_input(ui, &mut self.filters.asunto);
+                ui.add_space(8.0);
+
+                ui.label(RichText::new("Órgano de contratación").strong());
+                combo_codigo(
+                    ui,
+                    "organo",
+                    &mut self.filters.organo,
+                    &self.options.organos,
+                    self.combo_filtros.entry("organo".into()).or_default(),
+                );
+
+                // Columna dereita: clasificacións do contrato.
+                let ui = &mut cols[1];
+                ui.label(RichText::new("Tipo de contrato").strong());
+                combo_codigo(ui, "tc", &mut self.filters.tipo_contrato, &self.options.tipos_contrato, self.combo_filtros.entry("tc".into()).or_default());
+                ui.add_space(6.0);
+                ui.label(RichText::new("Tipo de procedemento").strong());
+                combo_codigo(ui, "tp", &mut self.filters.tipo_procedemento, &self.options.tipos_procedemento, self.combo_filtros.entry("tp".into()).or_default());
+                ui.add_space(6.0);
+                ui.label(RichText::new("Tipo de tramitación").strong());
+                combo_codigo(ui, "tt", &mut self.filters.tipo_tramitacion, &self.options.tipos_tramitacion, self.combo_filtros.entry("tt".into()).or_default());
+                ui.add_space(6.0);
+                ui.label(RichText::new("Sistema de contratación").strong());
+                combo_codigo(ui, "sc", &mut self.filters.sistema, &self.options.sistemas, self.combo_filtros.entry("sc".into()).or_default());
+                ui.add_space(6.0);
+                ui.label(RichText::new("Materia (CPV)").strong());
+                combo_codigo(ui, "cpv", &mut self.filters.materia, &self.options.materias, self.combo_filtros.entry("cpv".into()).or_default());
+            });
+
+            if !self.options_loaded {
+                ui.add_space(6.0);
+                ui.label(RichText::new("Cargando opcións de filtro…").small().italics());
             }
+
+            ui.add_space(12.0);
             ui.separator();
-            ui.label(RichText::new("Rexistro").strong());
-            ScrollArea::vertical().show(ui, |ui| {
-                for l in self.logs.iter().rev().take(200) {
-                    ui.label(RichText::new(l).small().monospace());
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                let importar = ui.add_enabled(
+                    !self.busy,
+                    egui::Button::new(RichText::new("Importar").color(Color32::WHITE))
+                        .fill(theme::accent(self.dark)),
+                );
+                if importar.clicked() {
+                    self.busy = true;
+                    self.progress = None;
+                    self.logs.clear();
+                    self.status = "Iniciando importación…".into();
+                    self.worker.send(Command::Sync(self.filters.clone()));
+                    self.show_import_dialog = false;
+                    self.show_progress_dialog = true;
+                }
+                if ui.button("Limpar filtros").clicked() {
+                    self.filters = Filters::default();
+                }
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if ui.button("Cancelar").clicked() {
+                        self.show_import_dialog = false;
+                    }
+                });
+            });
+        });
+
+        // O modal só se pecha co botón "Cancelar" (ou ao iniciar a importación),
+        // non ao premer fóra nin con Escape.
+        let _ = modal;
+    }
+
+    /// Modal coa barra de progreso da importación en curso.
+    fn progress_dialog(&mut self, ctx: &egui::Context) {
+        let modal = egui::Modal::new(egui::Id::new("progress_dialog")).show(ctx, |ui| {
+            ui.set_width(440.0);
+            ui.heading("Importación de datos");
+            ui.add_space(10.0);
+
+            if self.busy {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label(&self.status);
+                });
+                ui.add_space(8.0);
+                let frac = match self.progress {
+                    Some((done, total)) => done as f32 / total.max(1) as f32,
+                    None => 0.0,
+                };
+                let bar = egui::ProgressBar::new(frac).desired_width(ui.available_width());
+                let bar = match self.progress {
+                    Some((done, total)) => bar.text(format!("{done}/{total}")),
+                    None => bar.animate(true),
+                };
+                ui.add(bar);
+            } else {
+                ui.label(RichText::new(&self.status).strong());
+            }
+
+            if !self.logs.is_empty() {
+                ui.add_space(10.0);
+                ui.collapsing("Rexistro", |ui| {
+                    ScrollArea::vertical().max_height(160.0).show(ui, |ui| {
+                        for l in self.logs.iter().rev().take(200) {
+                            ui.label(RichText::new(l).small().monospace());
+                        }
+                    });
+                });
+            }
+
+            ui.add_space(12.0);
+            ui.separator();
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                if self.busy {
+                    if ui.button("Cancelar").clicked() {
+                        self.worker.request_cancel();
+                    }
+                } else {
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui
+                            .add(
+                                egui::Button::new(
+                                    RichText::new("Pechar").color(Color32::WHITE),
+                                )
+                                .fill(theme::accent(self.dark)),
+                            )
+                            .clicked()
+                        {
+                            self.show_progress_dialog = false;
+                        }
+                    });
                 }
             });
         });
+
+        // Mentres a importación está en curso non se pode pechar facendo clic fóra.
+        if !self.busy && modal.should_close() {
+            self.show_progress_dialog = false;
+        }
     }
 
-    fn local_tab(&mut self, ui: &mut egui::Ui) {
+    fn main_view(&mut self, ui: &mut egui::Ui) {
         egui::Panel::left("filtros_local")
             .resizable(true)
             .default_size(300.0)
@@ -325,19 +380,19 @@ impl App {
                 ui.add_space(6.0);
                 let mut changed = false;
                 ui.label(RichText::new("Texto (obxecto/referencia)").strong());
-                changed |= ui.text_edit_singleline(&mut self.local.texto).changed();
+                changed |= text_input(ui, &mut self.local.texto).changed();
                 ui.add_space(6.0);
                 ui.label(RichText::new("Adxudicatario").strong());
-                changed |= ui.text_edit_singleline(&mut self.local.adxudicatario).changed();
+                changed |= text_input(ui, &mut self.local.adxudicatario).changed();
                 ui.add_space(6.0);
                 ui.label(RichText::new("Organismo").strong());
-                changed |= ui.text_edit_singleline(&mut self.local.organismo).changed();
+                changed |= text_input(ui, &mut self.local.organismo).changed();
                 ui.add_space(6.0);
                 ui.label(RichText::new("Estado").strong());
-                changed |= ui.text_edit_singleline(&mut self.local.estado).changed();
+                changed |= text_input(ui, &mut self.local.estado).changed();
                 ui.add_space(6.0);
                 ui.label(RichText::new("Ano").strong());
-                changed |= ui.text_edit_singleline(&mut self.local.year).changed();
+                changed |= text_input(ui, &mut self.local.year).changed();
 
                 ui.add_space(12.0);
                 ui.horizontal(|ui| {
@@ -529,6 +584,15 @@ impl App {
     }
 }
 
+/// Campo de texto dunha liña con padding interior e ancho completo.
+fn text_input(ui: &mut egui::Ui, text: &mut String) -> egui::Response {
+    ui.add(
+        egui::TextEdit::singleline(text)
+            .margin(egui::Margin::symmetric(8, 6))
+            .desired_width(f32::INFINITY),
+    )
+}
+
 /// Mostra unha etiqueta + valor se o valor non está baleiro.
 fn field(ui: &mut egui::Ui, label: &str, value: &str) {
     if value.trim().is_empty() || value == "_" {
@@ -538,6 +602,31 @@ fn field(ui: &mut egui::Ui, label: &str, value: &str) {
         ui.label(RichText::new(format!("{label}: ")).strong().small());
         ui.label(RichText::new(value).small());
     });
+}
+
+/// Dropdown de anos (descendente, dende o ano actual) cunha opción "(todos)".
+fn year_combo(ui: &mut egui::Ui, selected: &mut String) {
+    let current = crate::model::current_year();
+    let actual = if selected.is_empty() {
+        "(todos)".to_string()
+    } else {
+        selected.clone()
+    };
+    egui::ComboBox::from_id_salt("ano")
+        .selected_text(actual)
+        .width(ui.available_width().min(280.0))
+        .height(320.0)
+        .show_ui(ui, |ui| {
+            if ui.selectable_label(selected.is_empty(), "(todos)").clicked() {
+                selected.clear();
+            }
+            for y in (2008..=current).rev() {
+                let ys = y.to_string();
+                if ui.selectable_label(*selected == ys, &ys).clicked() {
+                    *selected = ys;
+                }
+            }
+        });
 }
 
 /// ComboBox que selecciona un código a partir dunha lista `(código, etiqueta)`.
@@ -555,29 +644,49 @@ fn combo_codigo(
         .map(|(_, l)| l.as_str())
         .unwrap_or("(todos)");
 
+    // Flag en memoria para saber se o popup xa estaba aberto no frame anterior,
+    // e así enfocar o campo de busca só no momento de abrilo.
+    let open_id = egui::Id::new(("combo_open", id));
+    let was_open: bool = ui.data(|d| d.get_temp(open_id).unwrap_or(false));
+    let mut is_open = false;
+
     egui::ComboBox::from_id_salt(id)
         .selected_text(actual)
         .width(ui.available_width().min(280.0))
+        // Altura do popup: o ComboBox xa envolve o contido nun ScrollArea propio,
+        // que encolle se hai poucos resultados e fai scroll se hai moitos.
+        .height(320.0)
+        // Por defecto o popup péchase ao premer dentro (incluído o campo de busca);
+        // mantémolo aberto e pechámolo manualmente ao seleccionar unha opción.
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
         .show_ui(ui, |ui| {
+            is_open = true;
             if options.len() > 12 {
-                ui.text_edit_singleline(filtro);
-            }
-            if ui.selectable_label(selected.is_empty(), "(todos)").clicked() {
-                selected.clear();
-            }
-            let f = filtro.to_lowercase();
-            ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
-                for (code, label) in options {
-                    if !f.is_empty() && !label.to_lowercase().contains(&f) {
-                        continue;
-                    }
-                    if ui
-                        .selectable_label(selected == code, label)
-                        .clicked()
-                    {
-                        *selected = code.clone();
-                    }
+                let resp = text_input(ui, filtro);
+                // Ao abrir o popup, dirixir o teclado ao campo de busca.
+                if !was_open {
+                    resp.request_focus();
                 }
-            });
+            }
+            // Pecha o popup e limpa o texto de busca ao seleccionar unha opción.
+            let select = |selected: &mut String, value: &str, filtro: &mut String, ui: &egui::Ui| {
+                *selected = value.to_string();
+                filtro.clear();
+                ui.close();
+            };
+            if ui.selectable_label(selected.is_empty(), "(todos)").clicked() {
+                select(selected, "", filtro, ui);
+            }
+            let f = crate::model::normalize_search(filtro);
+            for (code, label) in options {
+                if !f.is_empty() && !crate::model::normalize_search(label).contains(&f) {
+                    continue;
+                }
+                if ui.selectable_label(selected == code, label).clicked() {
+                    select(selected, code, filtro, ui);
+                }
+            }
         });
+
+    ui.data_mut(|d| d.insert_temp(open_id, is_open));
 }

@@ -17,7 +17,7 @@ open = "5.3.5"
 regex = "1.12.3"
 reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "gzip", "cookies", "rustls", "form"] }
 rfd = "0.17.2"
-rusqlite = { version = "0.40.1", features = ["bundled"] }
+rusqlite = { version = "0.40.1", features = ["bundled", "functions"] }
 scraper = "0.27.0"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"

@@ -28,6 +28,13 @@ pub fn install_fonts(ctx: &egui::Context) {
             "../assets/fonts/Inter-SemiBold.ttf"
         ))),
     );
+    // Iconas Lucide (cada icona nun codepoint da área de uso privado).
+    fonts.font_data.insert(
+        "lucide".to_owned(),
+        Arc::new(FontData::from_static(include_bytes!(
+            "../assets/fonts/lucide.ttf"
+        ))),
+    );
 
     // Corpo: Inter Regular como fonte proporcional principal.
     fonts
@@ -37,13 +44,20 @@ pub fn install_fonts(ctx: &egui::Context) {
         .insert(0, "inter".to_owned());
 
     // Familias con nome para pesos específicos.
-    fonts
-        .families
-        .insert(FontFamily::Name("medium".into()), vec!["inter-medium".to_owned()]);
+    fonts.families.insert(
+        FontFamily::Name("medium".into()),
+        vec!["inter-medium".to_owned()],
+    );
     fonts.families.insert(
         FontFamily::Name("semibold".into()),
         vec!["inter-semibold".to_owned()],
     );
+    // Familia dedicada para as iconas. Non se usa como fallback porque Inter
+    // ocupa eses codepoints da PUA con variantes estilísticas propias; hai que
+    // pedir esta familia explicitamente para debuxar unha icona.
+    fonts
+        .families
+        .insert(FontFamily::Name("lucide".into()), vec!["lucide".to_owned()]);
 
     ctx.set_fonts(fonts);
 }
@@ -160,4 +174,40 @@ fn dark_visuals() -> Visuals {
 /// Color de acento segundo o modo.
 pub fn accent(dark: bool) -> Color32 {
     if dark { ACCENT_DARK } else { ACCENT_LIGHT }
+}
+
+/// Iconas Lucide (codepoints da área de uso privado da fonte `lucide.ttf`).
+pub mod icons {
+    /// `arrow-big-down`.
+    pub const ARROW_BIG_DOWN: &str = "\u{e1e1}";
+}
+
+/// Constrúe unha etiqueta para botóns cunha icona Lucide seguida de texto.
+/// A icona debúxase coa familia dedicada "lucide" e o texto co estilo de botón.
+pub fn icon_label(ui: &egui::Ui, icon: &str, text: &str, color: Color32) -> egui::text::LayoutJob {
+    use egui::Align;
+    use egui::text::{LayoutJob, TextFormat};
+
+    let mut job = LayoutJob::default();
+    job.append(
+        icon,
+        0.0,
+        TextFormat {
+            font_id: FontId::new(16.0, FontFamily::Name("lucide".into())),
+            color,
+            valign: Align::Center,
+            ..Default::default()
+        },
+    );
+    job.append(
+        &format!("  {text}"),
+        0.0,
+        TextFormat {
+            font_id: TextStyle::Button.resolve(ui.style()),
+            color,
+            valign: Align::Center,
+            ..Default::default()
+        },
+    );
+    job
 }
