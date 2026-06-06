@@ -1,7 +1,7 @@
 //! Interface gráfica (egui): listado de contratos importados como pantalla
 //! principal, e importación de datos en diálogos modais.
 
-use crate::db::{Db, DbStats};
+use crate::db::{Db, DbStats, LocalOptions};
 use crate::model::{
     ContractDetail, EstadoGroup, FilterOptions, Filters, LocalFilters, LocalRow, Resolucion,
 };
@@ -34,6 +34,7 @@ pub struct App {
     stats: DbStats,
 
     local: LocalFilters,
+    local_options: LocalOptions,
     rows: Vec<LocalRow>,
     need_query: bool,
     selected: Option<String>,
@@ -49,6 +50,7 @@ impl App {
         let db_path = crate::db_path();
         let db = Db::open(&db_path).expect("non se puido abrir a base de datos");
         let stats = db.stats().unwrap_or_default();
+        let local_options = db.local_options().unwrap_or_default();
 
         let worker = Worker::spawn(cc.egui_ctx.clone(), db_path);
         worker.send(Command::LoadOptions);
@@ -69,6 +71,7 @@ impl App {
             logs: Vec::new(),
             stats,
             local: LocalFilters::default(),
+            local_options,
             rows: Vec::new(),
             need_query: true,
             selected: None,
@@ -98,6 +101,7 @@ impl App {
                         r.novos, r.actualizados, r.saltados, r.detalles_descargados, r.erros
                     );
                     self.stats = self.db.stats().unwrap_or_default();
+                    self.local_options = self.db.local_options().unwrap_or_default();
                     self.need_query = true;
                 }
                 Event::Exported(path, n) => {
@@ -383,27 +387,50 @@ impl App {
                 changed |= text_input(ui, &mut self.local.texto).changed();
                 ui.add_space(6.0);
                 ui.label(RichText::new("Adxudicatario").strong());
-                changed |= text_input(ui, &mut self.local.adxudicatario).changed();
+                changed |= combo_valor(
+                    ui,
+                    "loc_adx",
+                    &mut self.local.adxudicatario,
+                    &self.local_options.adxudicatarios,
+                    self.combo_filtros.entry("loc_adx".into()).or_default(),
+                );
                 ui.add_space(6.0);
                 ui.label(RichText::new("Organismo").strong());
-                changed |= text_input(ui, &mut self.local.organismo).changed();
+                changed |= combo_valor(
+                    ui,
+                    "loc_org",
+                    &mut self.local.organismo,
+                    &self.local_options.organismos,
+                    self.combo_filtros.entry("loc_org".into()).or_default(),
+                );
                 ui.add_space(6.0);
                 ui.label(RichText::new("Estado").strong());
-                changed |= text_input(ui, &mut self.local.estado).changed();
+                changed |= combo_valor(
+                    ui,
+                    "loc_est",
+                    &mut self.local.estado,
+                    &self.local_options.estados,
+                    self.combo_filtros.entry("loc_est".into()).or_default(),
+                );
                 ui.add_space(6.0);
                 ui.label(RichText::new("Ano").strong());
-                changed |= text_input(ui, &mut self.local.year).changed();
+                changed |= combo_valor(
+                    ui,
+                    "loc_ano",
+                    &mut self.local.year,
+                    &self.local_options.anos,
+                    self.combo_filtros.entry("loc_ano".into()).or_default(),
+                );
 
                 ui.add_space(12.0);
-                ui.horizontal(|ui| {
-                    if ui.button("Buscar").clicked() {
-                        changed = true;
+                if ui.button("Limpar").clicked() {
+                    self.local = LocalFilters::default();
+                    for k in ["loc_adx", "loc_org", "loc_est", "loc_ano"] {
+                        self.combo_filtros.remove(k);
                     }
-                    if ui.button("Limpar").clicked() {
-                        self.local = LocalFilters::default();
-                        changed = true;
-                    }
-                });
+                    changed = true;
+                }
+                // A busca execútase automaticamente cando cambia calquera filtro.
                 if changed {
                     self.need_query = true;
                 }
@@ -629,6 +656,87 @@ fn year_combo(ui: &mut egui::Ui, selected: &mut String) {
         });
 }
 
+/// Dropdown de selección dun valor exacto dunha lista (co buscador integrado).
+/// Inclúe a opción "(todos)" que limpa o filtro. Devolve `true` se cambiou a selección.
+fn combo_valor(
+    ui: &mut egui::Ui,
+    id: &str,
+    selected: &mut String,
+    values: &[String],
+    filtro: &mut String,
+) -> bool {
+    let actual = if selected.is_empty() {
+        "(todos)"
+    } else {
+        selected.as_str()
+    };
+
+    let open_id = egui::Id::new(("combo_open", id));
+    let was_open: bool = ui.data(|d| d.get_temp(open_id).unwrap_or(false));
+    let mut is_open = false;
+    let mut closing = false;
+    let mut changed = false;
+
+    egui::ComboBox::from_id_salt(id)
+        .selected_text(actual)
+        .width(ui.available_width().min(280.0))
+        .height(320.0)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .show_ui(ui, |ui| {
+            is_open = true;
+            // Cada vez que se abre o popup (transición pechado→aberto) reiniciamos
+            // a busca: así o listado amósase completo e non filtrado pola última
+            // busca. Faise antes de pintar o buscador e de filtrar a lista.
+            if !was_open {
+                filtro.clear();
+            }
+
+            if values.len() > 12 {
+                let resp = text_input(ui, filtro);
+                // Foco no buscador ao abrir o popup.
+                if !was_open {
+                    resp.request_focus();
+                }
+            }
+
+            // Altura ESTABLE do popup: calcúlase a partir do total de entradas,
+            // non das visibles tras o filtro. Se dependese do filtro, ao reducir
+            // a poucos resultados o popup encollería; e como o `Area` do ComboBox
+            // queda fixado co tamaño do frame anterior e o seu ScrollArea limítase
+            // ao espazo dispoñible (`available.at_most(max_height)`), ese tamaño
+            // pequeno perpetúase: ao reabrir (ou ao limpar o filtro) o listado
+            // completo amosaríase nun oco dunha soa fila. Cunha altura constante
+            // o popup nunca se contrae e o problema desaparece.
+            let row_h = ui.spacing().interact_size.y + ui.spacing().item_spacing.y;
+            let filas = (values.len() + 1).min(10); // +1 pola opción "(todos)"
+            ui.set_min_height(filas as f32 * row_h);
+
+            let f = crate::model::normalize_search(filtro);
+            if ui.selectable_label(selected.is_empty(), "(todos)").clicked() {
+                selected.clear();
+                changed = true;
+                closing = true;
+                ui.close();
+            }
+            for v in values {
+                if !f.is_empty() && !crate::model::normalize_search(v).contains(&f) {
+                    continue;
+                }
+                if ui.selectable_label(selected == v, v).clicked() {
+                    *selected = v.clone();
+                    changed = true;
+                    closing = true;
+                    ui.close();
+                }
+            }
+        });
+
+    // Se pechamos por selección, gardamos estado "pechado" para que a próxima
+    // apertura se detecte como transición e se volva pedir o foco do buscador.
+    ui.data_mut(|d| d.insert_temp(open_id, is_open && !closing));
+    changed
+}
+
 /// ComboBox que selecciona un código a partir dunha lista `(código, etiqueta)`.
 /// Inclúe unha opción baleira "(todos)". `filtro` permite filtrar listas longas.
 fn combo_codigo(
@@ -649,6 +757,7 @@ fn combo_codigo(
     let open_id = egui::Id::new(("combo_open", id));
     let was_open: bool = ui.data(|d| d.get_temp(open_id).unwrap_or(false));
     let mut is_open = false;
+    let mut closing = false;
 
     egui::ComboBox::from_id_salt(id)
         .selected_text(actual)
@@ -668,14 +777,17 @@ fn combo_codigo(
                     resp.request_focus();
                 }
             }
-            // Pecha o popup e limpa o texto de busca ao seleccionar unha opción.
-            let select = |selected: &mut String, value: &str, filtro: &mut String, ui: &egui::Ui| {
-                *selected = value.to_string();
-                filtro.clear();
-                ui.close();
-            };
+            // Altura estable a partir do total de opcións (ver nota en `combo_valor`):
+            // evita que o popup quede fixado nun tamaño pequeno tras filtrar.
+            let row_h = ui.spacing().interact_size.y + ui.spacing().item_spacing.y;
+            let filas = (options.len() + 1).min(10); // +1 pola opción "(todos)"
+            ui.set_min_height(filas as f32 * row_h);
+            // Ao seleccionar, limpamos o texto de busca e pechamos o popup.
             if ui.selectable_label(selected.is_empty(), "(todos)").clicked() {
-                select(selected, "", filtro, ui);
+                selected.clear();
+                filtro.clear();
+                closing = true;
+                ui.close();
             }
             let f = crate::model::normalize_search(filtro);
             for (code, label) in options {
@@ -683,10 +795,15 @@ fn combo_codigo(
                     continue;
                 }
                 if ui.selectable_label(selected == code, label).clicked() {
-                    select(selected, code, filtro, ui);
+                    *selected = code.clone();
+                    filtro.clear();
+                    closing = true;
+                    ui.close();
                 }
             }
         });
 
-    ui.data_mut(|d| d.insert_temp(open_id, is_open));
+    // Tras pechar por selección, gardamos "pechado" para que a próxima apertura
+    // se detecte como transición e se volva pedir o foco do buscador.
+    ui.data_mut(|d| d.insert_temp(open_id, is_open && !closing));
 }

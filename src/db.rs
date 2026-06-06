@@ -21,6 +21,28 @@ pub struct DbStats {
     pub ultima_sync: Option<String>,
 }
 
+/// Valores distintos presentes na base de datos, para os despregables da busca local.
+#[derive(Debug, Clone, Default)]
+pub struct LocalOptions {
+    pub adxudicatarios: Vec<String>,
+    pub organismos: Vec<String>,
+    pub estados: Vec<String>,
+    pub anos: Vec<String>,
+}
+
+/// Extrae o ano (19xx/20xx) dunha cadea de data en calquera formato.
+fn extract_year(s: &str) -> Option<String> {
+    let b = s.as_bytes();
+    for w in b.windows(4) {
+        if w.iter().all(|c| c.is_ascii_digit())
+            && (w.starts_with(b"19") || w.starts_with(b"20"))
+        {
+            return Some(String::from_utf8_lossy(w).into_owned());
+        }
+    }
+    None
+}
+
 impl Db {
     pub fn open(path: &Path) -> Result<Self> {
         let conn = Connection::open(path)?;
@@ -33,8 +55,9 @@ impl Db {
             1,
             FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
             |ctx| {
-                let s = ctx.get::<String>(0)?;
-                Ok(normalize_search(&s))
+                // Tolerante a NULL (p.ex. adxudicatario nun LEFT JOIN sen resolución).
+                let s = ctx.get::<Option<String>>(0)?;
+                Ok(s.as_deref().map(normalize_search).unwrap_or_default())
             },
         )?;
         let db = Db { conn };
@@ -394,5 +417,109 @@ impl Db {
             resolucions.push(r?);
         }
         Ok(Some((detail, resolucions)))
+    }
+
+    /// Valores distintos da BD para poboar os despregables da busca local.
+    pub fn local_options(&self) -> Result<LocalOptions> {
+        let adxudicatarios = self.distinct(
+            "SELECT DISTINCT adxudicatario FROM contract_resolucion \
+             WHERE TRIM(COALESCE(adxudicatario,'')) <> '' ORDER BY adxudicatario COLLATE NOCASE",
+        )?;
+        let organismos = self.distinct(
+            "SELECT DISTINCT organismo FROM contracts \
+             WHERE TRIM(COALESCE(organismo,'')) <> '' ORDER BY organismo COLLATE NOCASE",
+        )?;
+        let estados = self.distinct(
+            "SELECT DISTINCT estado FROM contracts \
+             WHERE TRIM(COALESCE(estado,'')) <> '' ORDER BY estado COLLATE NOCASE",
+        )?;
+        let datas = self.distinct(
+            "SELECT DISTINCT data_publicacion FROM contracts \
+             WHERE TRIM(COALESCE(data_publicacion,'')) <> ''",
+        )?;
+        let mut anos: Vec<String> = datas
+            .iter()
+            .filter_map(|d| extract_year(d))
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        anos.sort_unstable_by(|a, b| b.cmp(a)); // descendente
+        Ok(LocalOptions {
+            adxudicatarios,
+            organismos,
+            estados,
+            anos,
+        })
+    }
+
+    /// Executa unha consulta que devolve unha única columna de texto.
+    fn distinct(&self, sql: &str) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(sql)?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn summary(id: &str, asunto: &str, organismo: &str, estado: &str, pub_: &str) -> ContractSummary {
+        ContractSummary {
+            id: id.into(),
+            referencia: format!("R{id}"),
+            asunto: asunto.into(),
+            importe: String::new(),
+            estado: estado.into(),
+            publicacion: pub_.into(),
+            cod_organismo: String::new(),
+            organismo: organismo.into(),
+        }
+    }
+
+    // Reproduce o fallo de nrm(NULL): un contrato sen resolución deixa
+    // `adxudicatario` a NULL no LEFT JOIN; antes a consulta enteira fallaba.
+    #[test]
+    fn busca_por_adxudicatario_con_contratos_sen_resolucion() {
+        let path = std::env::temp_dir().join("congal_test_nrm.sqlite");
+        let _ = std::fs::remove_file(&path);
+        let mut db = Db::open(&path).expect("db");
+
+        db.upsert_summaries(
+            &[
+                summary("1", "obra", "Concello", "Adxudicado", "01/02/2025"),
+                summary("2", "servizo", "Deputación", "Pendente", "03/04/2024"),
+            ],
+            "agora",
+        )
+        .expect("upsert summaries");
+
+        // Só o contrato 1 ten adxudicatario; o 2 queda con adxudicatario NULL.
+        let detail = ContractDetail {
+            contract_id: "1".into(),
+            ..Default::default()
+        };
+        let res = [Resolucion {
+            adxudicatario: "Empresa Técnica SL".into(),
+            ..Default::default()
+        }];
+        db.upsert_detail(&detail, &res).expect("upsert detail");
+
+        // Busca insensible a acentos sobre adxudicatario, ignorando os NULL.
+        let f = LocalFilters {
+            adxudicatario: "tecnica".into(),
+            ..Default::default()
+        };
+        let rows = db
+            .query_local(&f)
+            .expect("a consulta non debe fallar con adxudicatario NULL");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, "1");
+
+        let _ = std::fs::remove_file(&path);
     }
 }
