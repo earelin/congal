@@ -1,9 +1,10 @@
 //! Persistencia en SQLite (rusqlite, bundled).
 
 use crate::model::{
-    CargoRow, ContractDetail, ContractSummary, ContratoAdxudicado, DatosCifEntidade, EmpresaNodo,
-    GrupoRelacion, LocalFilters, LocalRow, PersoaNodo, Resolucion, company_key, format_data_gl,
-    format_importe, normalize_search, parse_data, parse_importe,
+    CargoRow, CasoRevision, ContractDetail, ContractSummary, ContratoAdxudicado, DatosCifEntidade,
+    EmpresaNodo, GrupoRelacion, LocalFilters, LocalRow, PersoaNodo, Resolucion, Suggestion, Ute,
+    UteRelacion, company_key, format_data_gl, format_importe, normalize_search, parse_data,
+    parse_importe,
 };
 use anyhow::Result;
 use rusqlite::functions::FunctionFlags;
@@ -179,6 +180,7 @@ impl Db {
                 participacion          TEXT,
                 estado_resolucion      TEXT,
                 adxudicatario          TEXT,
+                nif                    TEXT,
                 importe_resolucion_num REAL,
                 importe_resolucion_txt TEXT,
                 data_difusion          TEXT,
@@ -234,6 +236,31 @@ impl Db {
                 confianza      TEXT NOT NULL,
                 estado         TEXT NOT NULL,
                 actualizado_en TEXT
+            );
+
+            -- Composición das UTE adxudicatarias: unha fila por empresa membro.
+            -- A resolución do membro a datoscif faise por CIF contra
+            -- `datoscif_entidade.cif` (non se garda aquí).
+            CREATE TABLE IF NOT EXISTS ute_membro (
+                contract_id TEXT NOT NULL REFERENCES contracts(id) ON DELETE CASCADE,
+                ute_key     TEXT NOT NULL,   -- company_key(nome da UTE)
+                ute_nome    TEXT NOT NULL,
+                ute_nif     TEXT,
+                membro_cif  TEXT NOT NULL,
+                membro_nome TEXT NOT NULL,
+                PRIMARY KEY (contract_id, ute_key, membro_cif)
+            );
+
+            -- Candidatos de datoscif gardados para os casos en estado 'revisar',
+            -- a escoller a man na pestana de revisión.
+            CREATE TABLE IF NOT EXISTS adxudicatario_candidato (
+                adx_key      TEXT NOT NULL,
+                datoscif_url TEXT NOT NULL,
+                nome         TEXT NOT NULL,
+                tipo_entidad INTEGER NOT NULL,
+                uri          TEXT,
+                orde         INTEGER NOT NULL,
+                PRIMARY KEY (adx_key, datoscif_url)
             );
 
             CREATE INDEX IF NOT EXISTS idx_cargo_persona ON datoscif_cargo(persona_url);
@@ -379,9 +406,9 @@ impl Db {
             let mut stmt = tx.prepare(
                 r#"INSERT INTO contract_resolucion
                     (contract_id, lote, participacion, estado_resolucion, adxudicatario,
-                     importe_resolucion_num, importe_resolucion_txt, data_difusion,
+                     nif, importe_resolucion_num, importe_resolucion_txt, data_difusion,
                      prazo_execucion, recurso)
-                   VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)"#,
+                   VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)"#,
             )?;
             for r in resolucions {
                 stmt.execute(params![
@@ -390,6 +417,7 @@ impl Db {
                     r.participacion,
                     r.estado_resolucion,
                     r.adxudicatario,
+                    r.nif,
                     r.importe_num,
                     r.importe_txt,
                     r.data_difusion,
@@ -535,7 +563,7 @@ impl Db {
         };
 
         let mut stmt = self.conn.prepare(
-            r#"SELECT lote, participacion, estado_resolucion, adxudicatario,
+            r#"SELECT lote, participacion, estado_resolucion, adxudicatario, COALESCE(nif,''),
                       importe_resolucion_num, importe_resolucion_txt, data_difusion,
                       prazo_execucion, recurso
                FROM contract_resolucion WHERE contract_id = ?1"#,
@@ -546,11 +574,12 @@ impl Db {
                 participacion: row.get(1)?,
                 estado_resolucion: row.get(2)?,
                 adxudicatario: row.get(3)?,
-                importe_num: row.get(4)?,
-                importe_txt: row.get(5)?,
-                data_difusion: row.get(6)?,
-                prazo_execucion: row.get(7)?,
-                recurso: row.get(8)?,
+                nif: row.get(4)?,
+                importe_num: row.get(5)?,
+                importe_txt: row.get(6)?,
+                data_difusion: row.get(7)?,
+                prazo_execucion: row.get(8)?,
+                recurso: row.get(9)?,
             })
         })?;
         let mut resolucions = Vec::new();
@@ -609,13 +638,91 @@ impl Db {
     /// Adxudicatarios distintos (por clave normalizada) que aínda non teñen
     /// ningún rexistro en `adxudicatario_match`; devólvese un nome representativo.
     pub fn adxudicatarios_pendentes(&self) -> Result<Vec<String>> {
+        // Exclúense as UTE: non se buscan en datoscif (só os seus membros). Unha
+        // UTE recoñécese porque foi decomposta en `ute_membro` ou porque o seu
+        // NIF é de UTE (empeza por «U» seguido de díxito).
         self.distinct(
             "SELECT MIN(TRIM(adxudicatario)) FROM contract_resolucion \
              WHERE TRIM(COALESCE(adxudicatario,'')) <> '' \
+               AND COALESCE(nif,'') NOT GLOB 'U[0-9]*' \
                AND cokey(adxudicatario) NOT IN (SELECT adx_key FROM adxudicatario_match) \
+               AND cokey(adxudicatario) NOT IN (SELECT DISTINCT ute_key FROM ute_membro) \
              GROUP BY cokey(adxudicatario) \
              ORDER BY 1 COLLATE NOCASE",
         )
+    }
+
+    /// Substitúe a composición das UTE dun contrato. Bórraa se a lista é baleira.
+    pub fn upsert_utes(&mut self, contract_id: &str, utes: &[Ute]) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        tx.execute("DELETE FROM ute_membro WHERE contract_id = ?1", params![contract_id])?;
+        {
+            let mut stmt = tx.prepare(
+                r#"INSERT OR IGNORE INTO ute_membro
+                    (contract_id, ute_key, ute_nome, ute_nif, membro_cif, membro_nome)
+                   VALUES (?1,?2,?3,?4,?5,?6)"#,
+            )?;
+            for u in utes {
+                let key = company_key(&u.nome);
+                for m in &u.membros {
+                    stmt.execute(params![
+                        contract_id,
+                        key,
+                        u.nome,
+                        u.nif,
+                        m.cif,
+                        m.nome
+                    ])?;
+                }
+            }
+        }
+        // Unha UTE non se empareja con datoscif: límpanse as filas que puidese ter
+        // deixado un enrich anterior (antes de tela como UTE).
+        {
+            let mut del_m = tx.prepare("DELETE FROM adxudicatario_match WHERE adx_key = ?1")?;
+            let mut del_c = tx.prepare("DELETE FROM adxudicatario_candidato WHERE adx_key = ?1")?;
+            for u in utes {
+                let key = company_key(&u.nome);
+                del_m.execute(params![key])?;
+                del_c.execute(params![key])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Membros de UTE aínda sen entidade de datoscif (a súa empresa non está
+    /// gardada por CIF). Devolve `(membro_cif, membro_nome)` distintos.
+    pub fn ute_membros_pendentes(&self) -> Result<Vec<(String, String)>> {
+        let mut stmt = self.conn.prepare(
+            r#"SELECT membro_cif, MIN(membro_nome)
+               FROM ute_membro
+               WHERE membro_cif NOT IN
+                     (SELECT cif FROM datoscif_entidade WHERE TRIM(COALESCE(cif,'')) <> '')
+               GROUP BY membro_cif
+               ORDER BY 2 COLLATE NOCASE"#,
+        )?;
+        let out = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(out)
+    }
+
+    /// NIF/CIF coñecido dun adxudicatario (por clave normalizada do nome), se
+    /// algunha resolución o trae. Úsao `enrich` para validar/desambiguar por CIF.
+    pub fn nif_de_adxudicatario(&self, adx_nome: &str) -> Result<Option<String>> {
+        let key = company_key(adx_nome);
+        let nif = self
+            .conn
+            .query_row(
+                "SELECT nif FROM contract_resolucion \
+                 WHERE cokey(adxudicatario) = ?1 AND TRIM(COALESCE(nif,'')) <> '' \
+                 LIMIT 1",
+                params![key],
+                |r| r.get::<_, String>(0),
+            )
+            .ok();
+        Ok(nif.filter(|s| !s.trim().is_empty()))
     }
 
     /// Garda (ou actualiza) o resultado dun emparellamento. `datoscif_url` é
@@ -640,6 +747,110 @@ impl Db {
             params![key, adx_nome, datoscif_url, confianza, estado, now],
         )?;
         Ok(())
+    }
+
+    /// Substitúe os candidatos de revisión dun adxudicatario polos dados (na orde
+    /// recibida). Bórraos se a lista está baleira.
+    pub fn upsert_candidatos(&mut self, adx_nome: &str, candidatos: &[Suggestion]) -> Result<()> {
+        let key = company_key(adx_nome);
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "DELETE FROM adxudicatario_candidato WHERE adx_key = ?1",
+            params![key],
+        )?;
+        {
+            let mut stmt = tx.prepare(
+                r#"INSERT OR REPLACE INTO adxudicatario_candidato
+                    (adx_key, datoscif_url, nome, tipo_entidad, uri, orde)
+                   VALUES (?1,?2,?3,?4,?5,?6)"#,
+            )?;
+            for (i, c) in candidatos.iter().enumerate() {
+                stmt.execute(params![key, c.url, c.nombre, c.tipo_entidad, c.uri, i as i64])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Elimina os candidatos de revisión dun adxudicatario (ao resolver o caso).
+    pub fn delete_candidatos(&self, adx_nome: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM adxudicatario_candidato WHERE adx_key = ?1",
+            params![company_key(adx_nome)],
+        )?;
+        Ok(())
+    }
+
+    /// Casos pendentes de revisión manual (estado 'revisar'), con NIF e candidatos.
+    pub fn casos_para_revisar(&self) -> Result<Vec<CasoRevision>> {
+        let mut stmt = self.conn.prepare(
+            r#"SELECT m.adx_key, m.adx_nome,
+                      COALESCE((SELECT r.nif FROM contract_resolucion r
+                                WHERE cokey(r.adxudicatario) = m.adx_key
+                                  AND TRIM(COALESCE(r.nif,'')) <> '' LIMIT 1), '')
+               FROM adxudicatario_match m
+               WHERE m.estado = 'revisar'
+                 AND m.adx_key NOT IN (SELECT DISTINCT ute_key FROM ute_membro)
+               ORDER BY m.adx_nome COLLATE NOCASE"#,
+        )?;
+        let casos = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        let mut cand_stmt = self.conn.prepare(
+            r#"SELECT datoscif_url, nome, tipo_entidad, COALESCE(uri,'')
+               FROM adxudicatario_candidato WHERE adx_key = ?1 ORDER BY orde"#,
+        )?;
+        let mut out = Vec::with_capacity(casos.len());
+        for (key, adx_nome, nif) in casos {
+            let candidatos = cand_stmt
+                .query_map(params![key], |row| {
+                    Ok(Suggestion {
+                        url: row.get(0)?,
+                        nombre: row.get(1)?,
+                        tipo_entidad: row.get(2)?,
+                        uri: row.get(3)?,
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            out.push(CasoRevision {
+                adx_nome,
+                nif,
+                candidatos,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Adxudicatarios sen correspondencia en datoscif (estado 'pendente'): non se
+    /// atopou candidato ningún. Resólvense co proceso asistido (busca manual).
+    pub fn casos_sen_match(&self) -> Result<Vec<CasoRevision>> {
+        let mut stmt = self.conn.prepare(
+            r#"SELECT m.adx_nome,
+                      COALESCE((SELECT r.nif FROM contract_resolucion r
+                                WHERE cokey(r.adxudicatario) = m.adx_key
+                                  AND TRIM(COALESCE(r.nif,'')) <> '' LIMIT 1), '')
+               FROM adxudicatario_match m
+               WHERE m.estado = 'pendente'
+                 AND m.adx_key NOT IN (SELECT DISTINCT ute_key FROM ute_membro)
+               ORDER BY m.adx_nome COLLATE NOCASE"#,
+        )?;
+        let out = stmt
+            .query_map([], |row| {
+                Ok(CasoRevision {
+                    adx_nome: row.get(0)?,
+                    nif: row.get(1)?,
+                    candidatos: Vec::new(),
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(out)
     }
 
     /// Inserta/actualiza unha entidade de datoscif. `cargos_descargados` é
@@ -756,6 +967,39 @@ impl Db {
         Ok(ent)
     }
 
+    /// Empresas (tipo_entidad=1) xa presentes en datoscif: as razóns sociais
+    /// adxudicatarias vinculadas das que se descargou (ou se pode redescargar) a
+    /// ficha e os cargos. Úsao a reimportación para refrescar os datos.
+    pub fn empresas_vinculadas(&self) -> Result<Vec<DatosCifEntidade>> {
+        let mut stmt = self.conn.prepare(
+            r#"SELECT url, nome, tipo_entidad, COALESCE(uri,''),
+                      COALESCE(cif,''), COALESCE(domicilio,''),
+                      COALESCE(cod_postal,''), COALESCE(municipio,''),
+                      COALESCE(provincia,'')
+               FROM datoscif_entidade
+               WHERE tipo_entidad = 1
+               ORDER BY nome COLLATE NOCASE"#,
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(DatosCifEntidade {
+                url: row.get(0)?,
+                nome: row.get(1)?,
+                tipo_entidad: row.get(2)?,
+                uri: row.get(3)?,
+                cif: row.get(4)?,
+                domicilio: row.get(5)?,
+                cod_postal: row.get(6)?,
+                municipio: row.get(7)?,
+                provincia: row.get(8)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
     /// Cargos dunha empresa (activos primeiro), co nome da persoa vía JOIN.
     pub fn cargos_de_empresa(&self, empresa_url: &str) -> Result<Vec<CargoRow>> {
         let mut stmt = self.conn.prepare(
@@ -796,84 +1040,139 @@ impl Db {
     /// conta: só contan as razóns sociais con polo menos un contrato que casa cos
     /// filtros, de xeito que a vista de relacións reflicte o listado actual.
     pub fn relacions_compartidas(&self, filtros: &LocalFilters) -> Result<Vec<GrupoRelacion>> {
+        use std::collections::{HashMap, HashSet};
         let (where_sql, args) = local_where(filtros);
-        let sql = format!(
-            r#"
-            WITH empresa_contratos AS (
-                SELECT m.datoscif_url AS empresa_url,
-                       COUNT(DISTINCT r.contract_id) AS num_contratos
-                FROM adxudicatario_match m
-                JOIN contract_resolucion r ON cokey(r.adxudicatario) = m.adx_key
-                WHERE m.datoscif_url IS NOT NULL
-                  AND r.contract_id IN (
-                      SELECT c.id FROM contracts c
-                      LEFT JOIN organismos o ON o.cod_organismo = c.cod_organismo
-                      LEFT JOIN estados e ON e.cod_estado = c.cod_estado
-                      WHERE 1=1{where_sql}
-                  )
-                GROUP BY m.datoscif_url
-            ),
-            persoa_empresas AS (
-                SELECT c.persona_url, c.empresa_url
-                FROM datoscif_cargo c
-                JOIN empresa_contratos ec ON ec.empresa_url = c.empresa_url
-                GROUP BY c.persona_url, c.empresa_url
-            ),
-            persoas_multi AS (
-                SELECT persona_url FROM persoa_empresas
-                GROUP BY persona_url HAVING COUNT(DISTINCT empresa_url) >= 2
-            )
-            SELECT pe.persona_url, COALESCE(per.nome,''),
-                   pe.empresa_url, COALESCE(emp.nome,''), COALESCE(emp.provincia,''),
-                   ec.num_contratos
-            FROM persoa_empresas pe
-            JOIN persoas_multi pm ON pm.persona_url = pe.persona_url
-            JOIN empresa_contratos ec ON ec.empresa_url = pe.empresa_url
-            LEFT JOIN datoscif_entidade per ON per.url = pe.persona_url
-            LEFT JOIN datoscif_entidade emp ON emp.url = pe.empresa_url
-            "#
+        let params = || -> Vec<&dyn rusqlite::ToSql> {
+            args.iter().map(|s| s as &dyn rusqlite::ToSql).collect()
+        };
+        // Subconsulta dos contratos que casan cos filtros do panel. As empresas
+        // contratadas inclúen tanto os adxudicatarios normais como os MEMBROS das
+        // UTE adxudicatarias (resoltos por CIF contra `datoscif_entidade.cif`).
+        let filtrados = format!(
+            "filtrados AS (SELECT c.id FROM contracts c \
+               LEFT JOIN organismos o ON o.cod_organismo = c.cod_organismo \
+               LEFT JOIN estados e ON e.cod_estado = c.cod_estado \
+               WHERE 1=1{where_sql})"
         );
-        let mut stmt = self.conn.prepare(&sql)?;
-        let params_dyn: Vec<&dyn rusqlite::ToSql> =
-            args.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+        let ec_pairs = "ec_pairs AS ( \
+              SELECT m.datoscif_url AS empresa_url, r.contract_id AS contract_id \
+              FROM adxudicatario_match m \
+              JOIN contract_resolucion r ON cokey(r.adxudicatario) = m.adx_key \
+              WHERE m.datoscif_url IS NOT NULL AND r.contract_id IN (SELECT id FROM filtrados) \
+              UNION \
+              SELECT de.url, um.contract_id FROM ute_membro um \
+              JOIN datoscif_entidade de ON de.cif = um.membro_cif AND TRIM(COALESCE(de.cif,'')) <> '' \
+              WHERE um.contract_id IN (SELECT id FROM filtrados))";
 
-        // Cada fila é unha aresta persoa↔empresa.
+        // 1) Metadatos das empresas contratadas (nome, provincia, nº contratos).
+        let emp_sql = format!(
+            "WITH {filtrados}, {ec_pairs} \
+             SELECT ec.empresa_url, COALESCE(de.nome,''), COALESCE(de.provincia,''), \
+                    COUNT(DISTINCT ec.contract_id) \
+             FROM ec_pairs ec LEFT JOIN datoscif_entidade de ON de.url = ec.empresa_url \
+             GROUP BY ec.empresa_url"
+        );
+        let mut emp_meta: HashMap<String, (String, String, i64)> = HashMap::new();
+        {
+            let mut stmt = self.conn.prepare(&emp_sql)?;
+            let mut rows = stmt.query(params().as_slice())?;
+            while let Some(row) = rows.next()? {
+                emp_meta.insert(
+                    row.get(0)?,
+                    (row.get(1)?, row.get(2)?, row.get(3)?),
+                );
+            }
+        }
+
+        // 2) Arestas persoa↔empresa (persoas cun cargo en ≥2 das empresas).
+        let arestas_sql = format!(
+            "WITH {filtrados}, {ec_pairs}, \
+             empresa_contratos AS (SELECT empresa_url FROM ec_pairs GROUP BY empresa_url), \
+             persoa_empresas AS ( \
+                SELECT c.persona_url, c.empresa_url, MAX(COALESCE(c.activo,0)) AS activo \
+                FROM datoscif_cargo c JOIN empresa_contratos ec ON ec.empresa_url = c.empresa_url \
+                GROUP BY c.persona_url, c.empresa_url), \
+             persoas_multi AS (SELECT persona_url FROM persoa_empresas \
+                GROUP BY persona_url HAVING COUNT(DISTINCT empresa_url) >= 2) \
+             SELECT pe.persona_url, COALESCE(de.nome,''), pe.empresa_url, pe.activo \
+             FROM persoa_empresas pe \
+             JOIN persoas_multi pm ON pm.persona_url = pe.persona_url \
+             LEFT JOIN datoscif_entidade de ON de.url = pe.persona_url"
+        );
         struct Aresta {
             persona_url: String,
             persona_nome: String,
             empresa_url: String,
-            empresa_nome: String,
-            provincia: String,
-            num_contratos: i64,
+            activo: bool,
         }
-        let arestas: Vec<Aresta> = stmt
-            .query_map(params_dyn.as_slice(), |row| {
+        let arestas: Vec<Aresta> = {
+            let mut stmt = self.conn.prepare(&arestas_sql)?;
+            stmt.query_map(params().as_slice(), |row| {
                 Ok(Aresta {
                     persona_url: row.get(0)?,
                     persona_nome: row.get(1)?,
                     empresa_url: row.get(2)?,
-                    empresa_nome: row.get(3)?,
-                    provincia: row.get(4)?,
-                    num_contratos: row.get(5)?,
+                    activo: row.get::<_, i64>(3)? != 0,
                 })
             })?
-            .collect::<rusqlite::Result<_>>()?;
+            .collect::<rusqlite::Result<_>>()?
+        };
 
-        // Union-find sobre os nós (persoas e empresas) para atopar as
-        // compoñentes conexas. Os nós identifícanse cun prefixo "P:"/"E:" para
-        // que persoa e empresa co mesmo slug non colidan.
-        use std::collections::HashMap;
+        // 3) UTE adxudicatarias e os seus membros resoltos (≥2 para formar trama).
+        let ute_sql = format!(
+            "WITH {filtrados} \
+             SELECT um.contract_id, um.ute_key, um.ute_nome, de.url, COALESCE(de.nome,'') \
+             FROM ute_membro um \
+             JOIN datoscif_entidade de ON de.cif = um.membro_cif AND TRIM(COALESCE(de.cif,'')) <> '' \
+             WHERE um.contract_id IN (SELECT id FROM filtrados) \
+             ORDER BY um.contract_id, um.ute_key"
+        );
+        struct UteGrupo {
+            nome: String,
+            membros: Vec<(String, String)>, // (empresa_url, nome)
+        }
+        let mut utes: Vec<UteGrupo> = Vec::new();
+        {
+            let mut stmt = self.conn.prepare(&ute_sql)?;
+            let mut rows = stmt.query(params().as_slice())?;
+            let mut actual: Option<(String, String)> = None; // (contract_id, ute_key)
+            while let Some(row) = rows.next()? {
+                let cid: String = row.get(0)?;
+                let ukey: String = row.get(1)?;
+                let nome: String = row.get(2)?;
+                let murl: String = row.get(3)?;
+                let mnome: String = row.get(4)?;
+                if actual.as_ref() != Some(&(cid.clone(), ukey.clone())) {
+                    actual = Some((cid.clone(), ukey.clone()));
+                    utes.push(UteGrupo { nome, membros: Vec::new() });
+                }
+                utes.last_mut().unwrap().membros.push((murl, mnome));
+            }
+        }
+
+        // Union-find sobre os nós (persoas e empresas), prefixo "P:"/"E:".
         let mut idx: HashMap<String, usize> = HashMap::new();
-        let key_of = |prefix: char, url: &str, idx: &mut HashMap<String, usize>| -> usize {
+        let mut key_of = |prefix: char, url: &str| -> usize {
             let k = format!("{prefix}:{url}");
             let n = idx.len();
             *idx.entry(k).or_insert(n)
         };
-        let mut edges: Vec<(usize, usize)> = Vec::with_capacity(arestas.len());
+        let mut edges: Vec<(usize, usize)> = Vec::new();
         for a in &arestas {
-            let p = key_of('P', &a.persona_url, &mut idx);
-            let e = key_of('E', &a.empresa_url, &mut idx);
+            let p = key_of('P', &a.persona_url);
+            let e = key_of('E', &a.empresa_url);
             edges.push((p, e));
+        }
+        // Arestas empresa↔empresa por pertenza á mesma UTE (≥2 membros resoltos).
+        for u in &utes {
+            if u.membros.len() < 2 {
+                continue;
+            }
+            let base = key_of('E', &u.membros[0].0);
+            for m in &u.membros[1..] {
+                let e = key_of('E', &m.0);
+                edges.push((base, e));
+            }
         }
         let mut parent: Vec<usize> = (0..idx.len()).collect();
         fn find(parent: &mut [usize], mut x: usize) -> usize {
@@ -891,88 +1190,140 @@ impl Db {
             }
         }
 
-        // Acumular persoas e empresas distintas por compoñente (raíz).
+        // Flags de cargo por empresa (para distinguir vínculo histórico de UTE).
+        let mut emp_cargo: HashMap<String, (bool, bool)> = HashMap::new(); // (con_cargos, activa)
+        for a in &arestas {
+            let f = emp_cargo.entry(a.empresa_url.clone()).or_insert((false, false));
+            f.0 = true;
+            f.1 |= a.activo;
+        }
+
         #[derive(Default)]
         struct Build {
             persoas: HashMap<String, PersoaNodo>,
             empresas: HashMap<String, EmpresaNodo>,
+            utes: Vec<UteRelacion>,
             contratos: Vec<ContratoAdxudicado>,
+            contratos_vistos: HashSet<String>,
         }
         let mut grupos: HashMap<usize, Build> = HashMap::new();
+
+        // Persoas.
         for a in &arestas {
             let root = find(&mut parent, idx[&format!("P:{}", a.persona_url)]);
             let b = grupos.entry(root).or_default();
-            b.persoas
+            let persoa = b
+                .persoas
                 .entry(a.persona_url.clone())
                 .or_insert_with(|| PersoaNodo {
                     persona_url: a.persona_url.clone(),
                     persona_nome: a.persona_nome.clone(),
                     num_empresas: 0,
-                })
-                .num_empresas += 1;
-            b.empresas
-                .entry(a.empresa_url.clone())
-                .or_insert_with(|| EmpresaNodo {
-                    empresa_url: a.empresa_url.clone(),
-                    empresa_nome: a.empresa_nome.clone(),
-                    provincia: a.provincia.clone(),
-                    num_contratos: a.num_contratos,
+                    empresas_activas: 0,
+                    empresas_pasadas: 0,
                 });
+            persoa.num_empresas += 1;
+            if a.activo {
+                persoa.empresas_activas += 1;
+            } else {
+                persoa.empresas_pasadas += 1;
+            }
         }
 
-        // Contratos adxudicados ás razóns sociais dos grupos. Cada fila é a
-        // adxudicación dun contrato a unha empresa (importe sumado entre lotes da
-        // mesma empresa), e repártese ao grupo da súa empresa. Reusa os mesmos
-        // `filtros` que delimitan as empresas, e ordénase por data descendente.
-        let contratos_sql = format!(
-            r#"
-            SELECT m.datoscif_url AS empresa_url,
-                   r.contract_id,
-                   COALESCE(emp.nome,'') AS empresa_nome,
-                   COALESCE(c.asunto,'') AS asunto,
-                   COALESCE(c.data_publicacion,'') AS data_publicacion,
-                   SUM(r.importe_resolucion_num) AS importe
-            FROM adxudicatario_match m
-            JOIN contract_resolucion r ON cokey(r.adxudicatario) = m.adx_key
-            JOIN contracts c ON c.id = r.contract_id
-            LEFT JOIN datoscif_entidade emp ON emp.url = m.datoscif_url
-            WHERE m.datoscif_url IS NOT NULL
-              AND r.contract_id IN (
-                  SELECT c.id FROM contracts c
-                  LEFT JOIN organismos o ON o.cod_organismo = c.cod_organismo
-                  LEFT JOIN estados e ON e.cod_estado = c.cod_estado
-                  WHERE 1=1{where_sql}
-              )
-            GROUP BY m.datoscif_url, r.contract_id
-            ORDER BY c.data_publicacion DESC, r.contract_id DESC
-            "#
-        );
-        let mut stmt = self.conn.prepare(&contratos_sql)?;
-        let params_dyn: Vec<&dyn rusqlite::ToSql> =
-            args.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
-        let mut filas = stmt.query(params_dyn.as_slice())?;
-        while let Some(row) = filas.next()? {
-            let empresa_url: String = row.get(0)?;
-            // Só nos interesan as empresas que forman parte dalgún grupo.
-            let Some(&node) = idx.get(&format!("E:{empresa_url}")) else {
+        // Empresas: todo nó "E:" que apareza nalgunha aresta (persoa ou UTE).
+        let empresa_nodes: Vec<String> = idx
+            .keys()
+            .filter_map(|k| k.strip_prefix("E:").map(str::to_string))
+            .collect();
+        for url in empresa_nodes {
+            let root = find(&mut parent, idx[&format!("E:{url}")]);
+            let (nome, provincia, num_contratos) = emp_meta
+                .get(&url)
+                .cloned()
+                .unwrap_or_else(|| (url.clone(), String::new(), 0));
+            let (con_cargos, activa) = emp_cargo.get(&url).copied().unwrap_or((false, false));
+            grupos.entry(root).or_default().empresas.insert(
+                url.clone(),
+                EmpresaNodo {
+                    empresa_url: url,
+                    empresa_nome: nome,
+                    provincia,
+                    num_contratos,
+                    activa,
+                    con_cargos,
+                },
+            );
+        }
+
+        // UTE como vínculo do grupo (clase distinta do administrador compartido).
+        for u in &utes {
+            if u.membros.len() < 2 {
                 continue;
-            };
-            let root = find(&mut parent, node);
-            let Some(b) = grupos.get_mut(&root) else { continue };
-            let importe_num: f64 = row.get::<_, Option<f64>>(5)?.unwrap_or(0.0);
-            let data_iso: String = row.get(4)?;
-            b.contratos.push(ContratoAdxudicado {
-                contract_id: row.get(1)?,
-                empresa_nome: row.get(2)?,
-                asunto: row.get(3)?,
-                publicacion: format_data_gl(&data_iso),
-                importe_num,
-                importe_txt: format_importe(importe_num),
+            }
+            let root = find(&mut parent, idx[&format!("E:{}", u.membros[0].0)]);
+            grupos.entry(root).or_default().utes.push(UteRelacion {
+                nome: u.nome.clone(),
+                membros: u.membros.iter().map(|(_, n)| n.clone()).collect(),
             });
         }
 
-        // Materializar e ordenar: dentro de cada grupo por nome; os grupos por
-        // número de razóns sociais (e logo de contratos) en orde descendente.
+        // Contratos adxudicados ás empresas do grupo (normais + UTE), un por
+        // contrato e grupo (a UTE atribúese unha soa vez, co seu importe total).
+        let contratos_sql = format!(
+            "WITH {filtrados}, \
+             ute_imp AS (SELECT r.contract_id AS cid, cokey(r.adxudicatario) AS ute_key, \
+                                SUM(r.importe_resolucion_num) AS imp \
+                         FROM contract_resolucion r GROUP BY r.contract_id, cokey(r.adxudicatario)) \
+             SELECT empresa_url, contract_id, rotulo, asunto, data_publicacion, importe FROM ( \
+                SELECT m.datoscif_url AS empresa_url, r.contract_id AS contract_id, \
+                       COALESCE(de.nome,'') AS rotulo, COALESCE(c.asunto,'') AS asunto, \
+                       COALESCE(c.data_publicacion,'') AS data_publicacion, \
+                       SUM(r.importe_resolucion_num) AS importe \
+                FROM adxudicatario_match m \
+                JOIN contract_resolucion r ON cokey(r.adxudicatario) = m.adx_key \
+                JOIN contracts c ON c.id = r.contract_id \
+                LEFT JOIN datoscif_entidade de ON de.url = m.datoscif_url \
+                WHERE m.datoscif_url IS NOT NULL AND r.contract_id IN (SELECT id FROM filtrados) \
+                GROUP BY m.datoscif_url, r.contract_id \
+                UNION ALL \
+                SELECT de.url AS empresa_url, um.contract_id, um.ute_nome AS rotulo, \
+                       COALESCE(c.asunto,''), COALESCE(c.data_publicacion,''), ui.imp \
+                FROM ute_membro um \
+                JOIN datoscif_entidade de ON de.cif = um.membro_cif AND TRIM(COALESCE(de.cif,'')) <> '' \
+                JOIN contracts c ON c.id = um.contract_id \
+                LEFT JOIN ute_imp ui ON ui.cid = um.contract_id AND ui.ute_key = um.ute_key \
+                WHERE um.contract_id IN (SELECT id FROM filtrados)) \
+             ORDER BY data_publicacion DESC, contract_id DESC"
+        );
+        {
+            let mut stmt = self.conn.prepare(&contratos_sql)?;
+            let mut filas = stmt.query(params().as_slice())?;
+            while let Some(row) = filas.next()? {
+                let empresa_url: String = row.get(0)?;
+                let Some(&node) = idx.get(&format!("E:{empresa_url}")) else {
+                    continue;
+                };
+                let root = find(&mut parent, node);
+                let Some(b) = grupos.get_mut(&root) else { continue };
+                let contract_id: String = row.get(1)?;
+                // Un contrato cóntase unha soa vez por grupo (a UTE ten varios membros).
+                if !b.contratos_vistos.insert(contract_id.clone()) {
+                    continue;
+                }
+                let importe_num: f64 = row.get::<_, Option<f64>>(5)?.unwrap_or(0.0);
+                let data_iso: String = row.get(4)?;
+                b.contratos.push(ContratoAdxudicado {
+                    contract_id,
+                    empresa_nome: row.get(2)?,
+                    asunto: row.get(3)?,
+                    publicacion: format_data_gl(&data_iso),
+                    importe_num,
+                    importe_txt: format_importe(importe_num),
+                });
+            }
+        }
+
+        // Materializar e ordenar.
         let mut out: Vec<GrupoRelacion> = grupos
             .into_values()
             .map(|b| {
@@ -981,7 +1332,13 @@ impl Db {
                 let mut empresas: Vec<EmpresaNodo> = b.empresas.into_values().collect();
                 empresas.sort_by(|a, b| a.empresa_nome.to_lowercase().cmp(&b.empresa_nome.to_lowercase()));
                 let importe_total = b.contratos.iter().map(|c| c.importe_num).sum();
-                GrupoRelacion { persoas, empresas, contratos: b.contratos, importe_total }
+                GrupoRelacion {
+                    persoas,
+                    empresas,
+                    utes: b.utes,
+                    contratos: b.contratos,
+                    importe_total,
+                }
             })
             .collect();
         out.sort_by(|a, b| {
@@ -1178,6 +1535,124 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    // A cola de revisión garda candidatos co NIF do contrato e baléirase ao
+    // resolver o caso (cambiar de estado e borrar os candidatos).
+    #[test]
+    fn cola_de_revision_garda_e_resolve() {
+        use crate::model::{DatosCifEntidade, EstadoMatch, Suggestion};
+        let path = std::env::temp_dir().join("congal_test_revision.sqlite");
+        let _ = std::fs::remove_file(&path);
+        let mut db = Db::open(&path).expect("db");
+
+        db.upsert_summaries(
+            &[summary("1", "obra", "Concello", "Formalizado", "01/02/2025")],
+            "agora",
+        )
+        .expect("summaries");
+        db.upsert_detail(
+            &ContractDetail { contract_id: "1".into(), ..Default::default() },
+            &[Resolucion {
+                adxudicatario: "Talleres O Rosal SL".into(),
+                nif: "B36881415".into(),
+                ..Default::default()
+            }],
+        )
+        .expect("detail");
+
+        // Caso en revisión con dous candidatos.
+        db.upsert_match("Talleres O Rosal SL", None, "ambigua", EstadoMatch::Revisar.as_str(), "agora")
+            .expect("match");
+        db.upsert_candidatos(
+            "Talleres O Rosal SL",
+            &[
+                Suggestion {
+                    nombre: "TALLERES O ROSAL SL".into(),
+                    url: "talleres-o-rosal-sl".into(),
+                    uri: "/empresa/talleres-o-rosal-sl".into(),
+                    tipo_entidad: 1,
+                },
+                Suggestion {
+                    nombre: "TALLERES O ROSAL SA".into(),
+                    url: "talleres-o-rosal-sa".into(),
+                    uri: "/empresa/talleres-o-rosal-sa".into(),
+                    tipo_entidad: 1,
+                },
+            ],
+        )
+        .expect("candidatos");
+
+        let casos = db.casos_para_revisar().expect("casos");
+        assert_eq!(casos.len(), 1);
+        assert_eq!(casos[0].adx_nome, "Talleres O Rosal SL");
+        assert_eq!(casos[0].nif, "B36881415"); // tómase da resolución
+        assert_eq!(casos[0].candidatos.len(), 2);
+        assert_eq!(casos[0].candidatos[0].url, "talleres-o-rosal-sl"); // respéctase a orde
+
+        // Resolver a man: dar de alta a entidade, vincular e borrar candidatos.
+        db.upsert_datoscif_entidade(
+            &DatosCifEntidade {
+                url: "talleres-o-rosal-sl".into(),
+                nome: "TALLERES O ROSAL SL".into(),
+                tipo_entidad: 1,
+                ..Default::default()
+            },
+            false,
+            "agora",
+        )
+        .expect("entidade");
+        db.upsert_match(
+            "Talleres O Rosal SL",
+            Some("talleres-o-rosal-sl"),
+            "manual",
+            EstadoMatch::Manual.as_str(),
+            "agora",
+        )
+        .expect("match2");
+        db.delete_candidatos("Talleres O Rosal SL").expect("delete");
+
+        assert!(db.casos_para_revisar().expect("casos2").is_empty());
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    // Os casos 'pendente' (sen candidatos) aparecen en casos_sen_match, non na
+    // cola de revisión, para resolvelos co proceso asistido.
+    #[test]
+    fn casos_sen_match_lista_pendentes() {
+        use crate::model::EstadoMatch;
+        let path = std::env::temp_dir().join("congal_test_senmatch.sqlite");
+        let _ = std::fs::remove_file(&path);
+        let mut db = Db::open(&path).expect("db");
+
+        db.upsert_summaries(
+            &[summary("1", "obra", "Concello", "Formalizado", "01/02/2025")],
+            "agora",
+        )
+        .expect("summaries");
+        db.upsert_detail(
+            &ContractDetail { contract_id: "1".into(), ..Default::default() },
+            &[Resolucion {
+                adxudicatario: "Empresa Rara SL".into(),
+                nif: "B11111111".into(),
+                ..Default::default()
+            }],
+        )
+        .expect("detail");
+
+        db.upsert_match("Empresa Rara SL", None, "sen_match", EstadoMatch::Pendente.as_str(), "agora")
+            .expect("match");
+
+        let sen = db.casos_sen_match().expect("sen_match");
+        assert_eq!(sen.len(), 1);
+        assert_eq!(sen[0].adx_nome, "Empresa Rara SL");
+        assert_eq!(sen[0].nif, "B11111111");
+        assert!(sen[0].candidatos.is_empty());
+        // Non está na cola de revisión (esa é só para 'revisar').
+        assert!(db.casos_para_revisar().expect("rev").is_empty());
+
+        let _ = std::fs::remove_file(&path);
+    }
+
     // Dúas razóns sociais distintas, ambas adxudicatarias en contratos e ambas
     // co mesmo administrador (persona_url): debe detectarse a relación.
     #[test]
@@ -1270,6 +1745,164 @@ mod tests {
             .expect("query")
             .expect("debe atoparse");
         assert_eq!(ent.url, "empresa-a-sl");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    // Un administrador conecta dúas empresas pero foi cesado nunha: a relación
+    // mantense (indicio) pero debe marcarse como histórica nesa empresa.
+    #[test]
+    fn cargo_pasado_marca_vinculo_historico() {
+        use crate::model::{CargoRow, DatosCifEntidade};
+        let path = std::env::temp_dir().join("congal_test_historico.sqlite");
+        let _ = std::fs::remove_file(&path);
+        let mut db = Db::open(&path).expect("db");
+
+        db.upsert_summaries(
+            &[
+                summary("1", "obra", "Concello", "Formalizado", "01/02/2025"),
+                summary("2", "servizo", "Concello", "Formalizado", "03/04/2025"),
+            ],
+            "agora",
+        )
+        .expect("summaries");
+        db.upsert_detail(
+            &ContractDetail { contract_id: "1".into(), ..Default::default() },
+            &[Resolucion { adxudicatario: "Empresa A, S.L.".into(), ..Default::default() }],
+        )
+        .expect("detail 1");
+        db.upsert_detail(
+            &ContractDetail { contract_id: "2".into(), ..Default::default() },
+            &[Resolucion { adxudicatario: "EMPRESA B SL".into(), ..Default::default() }],
+        )
+        .expect("detail 2");
+
+        // Empresa A: cargo VIXENTE. Empresa B: cargo CESADO (histórico).
+        for (url, nome, adx, activo) in [
+            ("empresa-a-sl", "EMPRESA A SL", "Empresa A, S.L.", true),
+            ("empresa-b-sl", "EMPRESA B SL", "EMPRESA B SL", false),
+        ] {
+            db.upsert_datoscif_entidade(
+                &DatosCifEntidade {
+                    url: url.into(),
+                    nome: nome.into(),
+                    tipo_entidad: 1,
+                    ..Default::default()
+                },
+                true,
+                "agora",
+            )
+            .expect("entidade");
+            db.upsert_match(adx, Some(url), "exacta", "auto", "agora").expect("match");
+            db.upsert_cargos(
+                url,
+                &[CargoRow {
+                    persona_url: "perez-perez-xan".into(),
+                    persona_nome: "Perez Perez Xan".into(),
+                    cargo: "Administrador Único".into(),
+                    activo,
+                    hasta: if activo { String::new() } else { "2020-01-01".into() },
+                    ..Default::default()
+                }],
+                "agora",
+            )
+            .expect("cargos");
+        }
+
+        let rel = db.relacions_compartidas(&LocalFilters::default()).expect("relacions");
+        assert_eq!(rel.len(), 1);
+        let g = &rel[0];
+        // A persoa ten un vínculo actual e outro pasado.
+        assert_eq!(g.persoas[0].empresas_activas, 1);
+        assert_eq!(g.persoas[0].empresas_pasadas, 1);
+        // A empresa A está activa; a B só ten cargos pasados.
+        let a = g.empresas.iter().find(|e| e.empresa_url == "empresa-a-sl").unwrap();
+        let b = g.empresas.iter().find(|e| e.empresa_url == "empresa-b-sl").unwrap();
+        assert!(a.activa, "A ten cargo vixente");
+        assert!(!b.activa, "B só ten cargo cesado (histórico)");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    // Unha UTE adxudicataria relaciona as súas empresas membro (sen necesidade de
+    // administrador compartido); o contrato e o importe cóntanse unha soa vez.
+    #[test]
+    fn ute_relaciona_os_membros() {
+        use crate::model::{DatosCifEntidade, Ute, UteMembro};
+        let path = std::env::temp_dir().join("congal_test_ute.sqlite");
+        let _ = std::fs::remove_file(&path);
+        let mut db = Db::open(&path).expect("db");
+
+        db.upsert_summaries(
+            &[summary("1", "obra", "Concello", "Formalizado", "01/02/2025")],
+            "agora",
+        )
+        .expect("summaries");
+        // O adxudicatario é a UTE.
+        db.upsert_detail(
+            &ContractDetail { contract_id: "1".into(), ..Default::default() },
+            &[Resolucion {
+                adxudicatario: "UTE A - B".into(),
+                importe_num: Some(1000.0),
+                ..Default::default()
+            }],
+        )
+        .expect("detail");
+        // As dúas empresas membro, xa con ficha en datoscif (CIF).
+        for (url, nome, cif) in [
+            ("empresa-a-sl", "EMPRESA A SL", "A11111111"),
+            ("empresa-b-sl", "EMPRESA B SL", "B22222222"),
+        ] {
+            db.upsert_datoscif_entidade(
+                &DatosCifEntidade {
+                    url: url.into(),
+                    nome: nome.into(),
+                    tipo_entidad: 1,
+                    cif: cif.into(),
+                    ..Default::default()
+                },
+                true,
+                "agora",
+            )
+            .expect("entidade");
+        }
+        // Composición da UTE.
+        db.upsert_utes(
+            "1",
+            &[Ute {
+                nome: "UTE A - B".into(),
+                nif: "U12345678".into(),
+                membros: vec![
+                    UteMembro { cif: "A11111111".into(), nome: "EMPRESA A".into() },
+                    UteMembro { cif: "B22222222".into(), nome: "EMPRESA B".into() },
+                ],
+            }],
+        )
+        .expect("utes");
+
+        let rel = db.relacions_compartidas(&LocalFilters::default()).expect("rel");
+        assert_eq!(rel.len(), 1, "un grupo coa UTE");
+        let g = &rel[0];
+        assert_eq!(g.empresas.len(), 2, "os dous membros");
+        assert!(g.persoas.is_empty(), "sen administrador compartido");
+        assert_eq!(g.utes.len(), 1);
+        assert!(g.utes[0].nome.contains("UTE A"));
+        assert_eq!(g.utes[0].membros.len(), 2);
+        // O contrato e o importe cóntanse unha soa vez (non por cada membro).
+        assert_eq!(g.contratos.len(), 1);
+        assert_eq!(g.importe_total, 1000.0);
+        // As empresas non levan marca de «só cargos pasados» (entran por UTE).
+        assert!(g.empresas.iter().all(|e| !e.con_cargos));
+
+        // A propia UTE NON se busca en datoscif nin aparece na cola de revisión.
+        assert!(
+            !db.adxudicatarios_pendentes()
+                .unwrap()
+                .iter()
+                .any(|a| a.contains("UTE")),
+            "o nome da UTE non debe estar entre os adxudicatarios a vincular"
+        );
+        assert!(db.casos_sen_match().unwrap().iter().all(|c| !c.adx_nome.contains("UTE")));
 
         let _ = std::fs::remove_file(&path);
     }

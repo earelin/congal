@@ -1,8 +1,8 @@
 //! Fío traballador en segundo plano e canle de eventos cara á interface.
 
 use crate::db::Db;
-use crate::enrich::{self, EnrichResult};
-use crate::model::{FilterOptions, Filters, LocalFilters};
+use crate::enrich::{self, EnrichMode, EnrichResult};
+use crate::model::{FilterOptions, Filters, LocalFilters, Suggestion};
 use crate::scraper::{self, Client};
 use crate::sync::{self, SyncResult};
 use std::path::PathBuf;
@@ -16,7 +16,20 @@ pub enum Command {
     LoadOptions,
     Sync(Filters),
     /// Vincula os adxudicatarios con datoscif e descarga os cargos das empresas.
-    Enrich,
+    /// O modo decide se só se procesan os novos ou se se reimportan todas.
+    Enrich(EnrichMode),
+    /// Resolve a man un caso de revisión: vincula o adxudicatario á entidade
+    /// escollida (`Some`) ou descártao (`None`).
+    ResolveMatch {
+        adx_nome: String,
+        escolla: Option<Suggestion>,
+    },
+    /// Busca en vivo en datoscif (proceso asistido de revisión). `adx_nome`
+    /// identifica o caso para asociar os resultados.
+    SearchDatoscif {
+        adx_nome: String,
+        termo: String,
+    },
     Export {
         path: PathBuf,
         filters: LocalFilters,
@@ -35,6 +48,16 @@ pub enum Event {
     },
     SyncDone(SyncResult),
     EnrichDone(EnrichResult),
+    /// Un caso de revisión resolveuse (vinculado a man ou descartado).
+    RevisionResolved {
+        adx_nome: String,
+        vinculado: bool,
+    },
+    /// Resultados dunha busca asistida en datoscif para un caso de revisión.
+    DatoscifResults {
+        adx_nome: String,
+        suggestions: Vec<Suggestion>,
+    },
     Exported(PathBuf, usize),
     Error(String),
     Log(String),
@@ -94,14 +117,45 @@ impl Worker {
                             }
                         }
                     }
-                    Command::Enrich => {
-                        match enrich::run_enrich(&client, &mut db, &tx_evt, &cancel_thread) {
+                    Command::Enrich(mode) => {
+                        match enrich::run_enrich(&client, &mut db, &tx_evt, &cancel_thread, mode) {
                             Ok(r) => {
                                 let _ = tx_evt.send(Event::EnrichDone(r));
                             }
                             Err(e) => {
                                 let _ = tx_evt
                                     .send(Event::Error(format!("Erro no enriquecemento: {e}")));
+                            }
+                        }
+                    }
+                    Command::ResolveMatch { adx_nome, escolla } => {
+                        let vinculado = escolla.is_some();
+                        match enrich::vincular_manual(&client, &mut db, &tx_evt, &adx_nome, escolla)
+                        {
+                            Ok(()) => {
+                                let _ = tx_evt.send(Event::RevisionResolved {
+                                    adx_nome,
+                                    vinculado,
+                                });
+                            }
+                            Err(e) => {
+                                let _ = tx_evt.send(Event::Error(format!(
+                                    "Erro resolvendo «{adx_nome}»: {e}"
+                                )));
+                            }
+                        }
+                    }
+                    Command::SearchDatoscif { adx_nome, termo } => {
+                        match scraper::search_entities(&client, &termo) {
+                            Ok(suggestions) => {
+                                let _ = tx_evt.send(Event::DatoscifResults {
+                                    adx_nome,
+                                    suggestions,
+                                });
+                            }
+                            Err(e) => {
+                                let _ = tx_evt
+                                    .send(Event::Error(format!("Erro buscando «{termo}»: {e}")));
                             }
                         }
                     }

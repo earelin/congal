@@ -134,6 +134,10 @@ pub struct Resolucion {
     pub participacion: String,
     pub estado_resolucion: String,
     pub adxudicatario: String,
+    /// NIF/CIF do adxudicatario (extraído das táboas ocultas de licitadores/
+    /// formalización; a táboa principal de resolución só trae o nome). Baleiro
+    /// se non se atopou.
+    pub nif: String,
     pub importe_txt: String,
     pub importe_num: Option<f64>,
     pub data_difusion: String,
@@ -173,6 +177,32 @@ pub fn normalize_search(s: &str) -> String {
             other => other,
         })
         .collect()
+}
+
+/// Normaliza un nome para a busca en datoscif. A diferenza de [`normalize_search`],
+/// **mantén o ñ**: datoscif dobra os acentos agudos (á→a) pero CONSERVA o ñ no seu
+/// índice, e a busca está anclada ao inicio (prefixo). Os puntos elimínanse sen
+/// oco (S.A.D → sad) e o resto da puntuación convértese en espazo.
+///
+/// Ademais, a petición a datoscif debe ir codificada en **ISO-8859-1** (o ñ vai
+/// como `%F1`, non `%C3%91`); diso encárgase `scraper::search_entities`.
+pub fn normalize_busca_datoscif(s: &str) -> String {
+    let mut buf = String::with_capacity(s.len());
+    for c in s.chars().flat_map(char::to_lowercase) {
+        match c {
+            'á' | 'à' | 'ä' | 'â' | 'ã' => buf.push('a'),
+            'é' | 'è' | 'ë' | 'ê' => buf.push('e'),
+            'í' | 'ì' | 'ï' | 'î' => buf.push('i'),
+            'ó' | 'ò' | 'ö' | 'ô' | 'õ' => buf.push('o'),
+            'ú' | 'ù' | 'ü' | 'û' => buf.push('u'),
+            'ç' => buf.push('c'),
+            // O ñ NON se dobra: cae no caso alfanumérico e mantense.
+            '.' | ',' | '\'' | '"' | '`' | '·' => {}
+            c if c.is_alphanumeric() || c == ' ' => buf.push(c),
+            _ => buf.push(' '),
+        }
+    }
+    buf.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Normaliza un importe en formato galego/español (`1.000.000,00 €`) a `f64`.
@@ -295,6 +325,24 @@ pub struct EmpresaInfo {
     pub provincia: String,
 }
 
+/// Unha empresa membro dunha UTE, tal como vén no popup de licitadores
+/// (`CIF - NOME`). O CIF é completo e fiable; o nome pode vir truncado.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UteMembro {
+    pub cif: String,
+    pub nome: String,
+}
+
+/// Unha Unión Temporal de Empresas (UTE) presentada nun contrato: o seu nome, o
+/// seu NIF (empeza por `U`, ou un código `TEMP-` provisional) e as empresas que
+/// a compoñen.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Ute {
+    pub nome: String,
+    pub nif: String,
+    pub membros: Vec<UteMembro>,
+}
+
 /// Un cargo (relación persoa→empresa) para amosar na vista de detalle.
 #[derive(Debug, Clone, Default)]
 pub struct CargoRow {
@@ -313,6 +361,11 @@ pub struct EmpresaNodo {
     pub empresa_nome: String,
     pub provincia: String,
     pub num_contratos: i64,
+    /// `true` se algunha persoa do grupo ten un cargo **vixente** nesta empresa.
+    pub activa: bool,
+    /// `true` se a empresa ten algún vínculo por cargo (vixente ou cesado). Se é
+    /// `false` pero está no grupo, conéctaa só unha UTE (non un administrador).
+    pub con_cargos: bool,
 }
 
 /// Unha persoa (administrador/apoderado) que conecta razóns sociais dun grupo.
@@ -322,6 +375,10 @@ pub struct PersoaNodo {
     pub persona_nome: String,
     /// Cantas razóns sociais do grupo controla esta persoa.
     pub num_empresas: usize,
+    /// Razóns sociais do grupo onde o seu cargo está vixente.
+    pub empresas_activas: usize,
+    /// Razóns sociais do grupo onde o seu cargo xa foi cesado (histórico).
+    pub empresas_pasadas: usize,
 }
 
 /// Un contrato adxudicado a unha das razóns sociais dun grupo. Úsase no
@@ -342,10 +399,21 @@ pub struct ContratoAdxudicado {
 /// do grafo persoa↔empresa, onde as persoas comparten cargo en varias das
 /// empresas adxudicatarias. Substitúe a vista de «unha persoa por tarxeta»,
 /// fusionando os casos onde varias persoas controlan as mesmas empresas.
+/// Unha UTE que conecta varias razóns sociais do grupo (vínculo «UTE», distinto
+/// do vínculo por administrador compartido).
+#[derive(Debug, Clone)]
+pub struct UteRelacion {
+    pub nome: String,
+    /// Nomes das empresas membros (as que se puideron emparellar con datoscif).
+    pub membros: Vec<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct GrupoRelacion {
     pub persoas: Vec<PersoaNodo>,
     pub empresas: Vec<EmpresaNodo>,
+    /// UTE que vinculan razóns sociais deste grupo (poden estar baleiras).
+    pub utes: Vec<UteRelacion>,
     /// Contratos nos que as razóns sociais do grupo son adxudicatarias,
     /// ordenados por data descendente. Limitados polos filtros do panel.
     pub contratos: Vec<ContratoAdxudicado>,
@@ -356,13 +424,16 @@ pub struct GrupoRelacion {
 /// Nivel de confianza do emparellamento adxudicatario ↔ entidade de datoscif.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Confianza {
+    /// O CIF da ficha de datoscif coincide co NIF do adxudicatario: o sinal máis
+    /// fiable, mesmo cando os nomes difiren.
+    Cif,
     /// Nome normalizado idéntico.
     Exacta,
     /// Idéntico tras eliminar o sufixo de razón social (SL, SA…).
     Nucleo,
     /// Persoa: mesmos tokens de nome sen importar a orde.
     Tokens,
-    /// Varios candidatos igual de bos: non se vincula.
+    /// Varios candidatos igual de bos: non se vincula automaticamente.
     Ambigua,
     /// Ningún candidato casa.
     SenMatch,
@@ -371,6 +442,7 @@ pub enum Confianza {
 impl Confianza {
     pub fn as_str(self) -> &'static str {
         match self {
+            Confianza::Cif => "cif",
             Confianza::Exacta => "exacta",
             Confianza::Nucleo => "nucleo",
             Confianza::Tokens => "tokens",
@@ -378,20 +450,22 @@ impl Confianza {
             Confianza::SenMatch => "sen_match",
         }
     }
-
-    /// Indica se o emparellamento é dabondo fiable como para vincularse só.
-    pub fn is_auto(self) -> bool {
-        matches!(self, Confianza::Exacta | Confianza::Nucleo | Confianza::Tokens)
-    }
 }
 
-/// Estado de revisión dun emparellamento (a revisión manual queda para o futuro).
+/// Estado de revisión dun emparellamento adxudicatario ↔ datoscif.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EstadoMatch {
     /// Vinculado automaticamente por alta confianza.
     Auto,
-    /// Sen vínculo: pendente de revisión manual.
+    /// Sen candidatos plausibles: nada que revisar.
     Pendente,
+    /// Hai candidatos plausibles pero sen confianza dabondo: agarda confirmación
+    /// da persoa usuaria na pestana de revisión.
+    Revisar,
+    /// Vinculado a man pola persoa usuaria.
+    Manual,
+    /// A persoa usuaria revisou e descartou todos os candidatos (sen vínculo).
+    Descartado,
 }
 
 impl EstadoMatch {
@@ -399,16 +473,29 @@ impl EstadoMatch {
         match self {
             EstadoMatch::Auto => "auto",
             EstadoMatch::Pendente => "pendente",
+            EstadoMatch::Revisar => "revisar",
+            EstadoMatch::Manual => "manual",
+            EstadoMatch::Descartado => "descartado",
         }
     }
+}
+
+/// Un caso pendente de revisión manual: un adxudicatario sen vínculo fiable, co
+/// seu NIF (se se coñece) e a lista de candidatos de datoscif a escoller.
+#[derive(Debug, Clone)]
+pub struct CasoRevision {
+    pub adx_nome: String,
+    /// NIF/CIF do adxudicatario, se algunha resolución o trae (baleiro se non).
+    pub nif: String,
+    pub candidatos: Vec<Suggestion>,
 }
 
 /// Sufixos de razón social (xa normalizados, sen puntos) que se eliminan ao
 /// comparar nomes de empresa, xa que poden non coincidir entre as dúas fontes.
 const LEGAL_SUFFIXES: &[&str] = &[
-    "slu", "slne", "sll", "slp", "sl", "slu", "srl", "srlu", "sau", "sal", "sa",
+    "slu", "slne", "sll", "slp", "sl", "srl", "srlu", "sau", "sal", "sad", "sa",
     "scoop", "coop", "scp", "sc", "aie", "ute", "cb", "sociedad", "limitada",
-    "anonima",
+    "anonima", "deportiva",
 ];
 
 /// Clave de comparación dun nome: minúsculas, sen acentos, **sen puntos/comas**
@@ -442,6 +529,63 @@ pub fn company_core(s: &str) -> String {
     strip_legal_suffix(&company_key(s))
 }
 
+/// Termo de busca de reserva: o núcleo do nome (sen sufixo de razón social) e
+/// sen as palabras moi curtas (1-2 letras), que adoitan ser ruído. Úsase para
+/// reintentar a busca en datoscif cando o nome completo non dá resultados.
+pub fn fallback_search_term(s: &str) -> String {
+    // Mantense o ñ (normalización datoscif) e quítase o sufixo de razón social.
+    strip_legal_suffix(&normalize_busca_datoscif(s))
+        .split_whitespace()
+        .filter(|t| t.chars().count() > 2)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Normaliza un NIF/CIF para comparar: en maiúsculas e só alfanuméricos
+/// (elimina puntos, guións e espazos). «b-36.881.415» → «B36881415».
+pub fn normalize_nif(s: &str) -> String {
+    s.chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(|c| c.to_uppercase())
+        .collect()
+}
+
+/// Tipo de entidade deducido do formato do NIF/CIF.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NifKind {
+    /// CIF de persoa xurídica (empresa): letra inicial + 7 díxitos + control.
+    Empresa,
+    /// NIF/NIE de persoa física: 8 díxitos + letra, ou NIE [XYZ]+7+letra.
+    Persoa,
+}
+
+/// Deduce se un NIF/CIF é de empresa ou de persoa física polo seu formato.
+/// Devolve `None` se non encaixa en ningún patrón coñecido.
+pub fn nif_kind(nif: &str) -> Option<NifKind> {
+    let n = normalize_nif(nif);
+    let b = n.as_bytes();
+    if b.len() != 9 {
+        return None;
+    }
+    let is_digit = |c: u8| c.is_ascii_digit();
+    // CIF empresa: [ABCDEFGHJNPQRSUVW] + 7 díxitos + (díxito ou letra de control).
+    if b"ABCDEFGHJNPQRSUVW".contains(&b[0])
+        && b[1..8].iter().all(|&c| is_digit(c))
+        && (is_digit(b[8]) || b[8].is_ascii_alphabetic())
+    {
+        return Some(NifKind::Empresa);
+    }
+    // NIF persoa: 8 díxitos + letra.
+    if b[..8].iter().all(|&c| is_digit(c)) && b[8].is_ascii_alphabetic() {
+        return Some(NifKind::Persoa);
+    }
+    // NIE: [XYZ] + 7 díxitos + letra.
+    if b"XYZ".contains(&b[0]) && b[1..8].iter().all(|&c| is_digit(c)) && b[8].is_ascii_alphabetic() {
+        return Some(NifKind::Persoa);
+    }
+    None
+}
+
 /// Multiset ordenado de tokens dunha clave (para comparar nomes de persoa sen
 /// importar a orde: «nome apelido1 apelido2» vs «apelido1 apelido2 nome»).
 fn token_multiset(key: &str) -> Vec<String> {
@@ -468,13 +612,26 @@ fn pick(pool: &mut Vec<String>) -> Pick {
     }
 }
 
-/// Escolle a mellor entidade de datoscif para un adxudicatario, con prioridade
-/// Exacta > Núcleo (empresa) > Tokens (persoa). Só devolve `Some(url)` se hai un
-/// único gañador no mellor nivel; se hai empate devolve `(None, Ambigua)`.
-pub fn best_match(adx_nome: &str, suggestions: &[Suggestion]) -> (Option<String>, Confianza) {
+/// Resultado de emparellar por nome un adxudicatario coas suxestións de datoscif.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MatchResult {
+    /// Un único gañador claro no mellor nivel de confianza.
+    Unico(String, Confianza),
+    /// Empate no mellor nivel: varios candidatos (slugs) igual de bos. Resólvese
+    /// despois validando por CIF ou pedindo confirmación.
+    Ambiguo(Vec<String>),
+    /// Ningún candidato casa por nome.
+    Ningun,
+}
+
+/// Empareja por nome un adxudicatario coas suxestións, con prioridade
+/// Exacta > Núcleo (empresa) > Tokens (persoa). No mellor nivel non baleiro,
+/// devolve [`MatchResult::Unico`] se hai un só gañador ou [`MatchResult::Ambiguo`]
+/// coa lista de candidatos se hai empate.
+pub fn match_suggestions(adx_nome: &str, suggestions: &[Suggestion]) -> MatchResult {
     let akey = company_key(adx_nome);
     if akey.is_empty() {
-        return (None, Confianza::SenMatch);
+        return MatchResult::Ningun;
     }
     let acore = company_core(adx_nome);
     let atoks = token_multiset(&akey);
@@ -504,12 +661,63 @@ pub fn best_match(adx_nome: &str, suggestions: &[Suggestion]) -> (Option<String>
         (tokens, Confianza::Tokens),
     ] {
         match pick(&mut pool) {
-            Pick::One(url) => return (Some(url), conf),
-            Pick::Many => return (None, Confianza::Ambigua),
+            Pick::One(url) => return MatchResult::Unico(url, conf),
+            Pick::Many => {
+                pool.sort();
+                pool.dedup();
+                return MatchResult::Ambiguo(pool);
+            }
             Pick::Empty => {}
         }
     }
-    (None, Confianza::SenMatch)
+    MatchResult::Ningun
+}
+
+/// Candidatos plausibles para revisión manual cando non houbo vínculo fiable.
+/// Inclúe os empatados nun nivel de confianza (`Ambiguo`) e mais as suxestións
+/// que comparten algunha palabra distintiva (>2 letras) co núcleo do nome. Ordena
+/// os empatados primeiro, deduplica por slug e limita o número (evita ruído).
+pub fn review_candidates(adx_nome: &str, suggestions: &[Suggestion]) -> Vec<Suggestion> {
+    const MAX: usize = 8;
+    let tied: Vec<String> = match match_suggestions(adx_nome, suggestions) {
+        MatchResult::Ambiguo(urls) => urls,
+        _ => Vec::new(),
+    };
+    let core_tokens: std::collections::HashSet<String> = company_core(adx_nome)
+        .split_whitespace()
+        .filter(|t| t.chars().count() > 2)
+        .map(str::to_string)
+        .collect();
+
+    let comparte_token = |nome: &str| -> bool {
+        company_core(nome)
+            .split_whitespace()
+            .any(|t| t.chars().count() > 2 && core_tokens.contains(t))
+    };
+
+    let mut out: Vec<Suggestion> = Vec::new();
+    let mut vistos = std::collections::HashSet::new();
+    // Primeiro os empatados (na orde estable dos slugs), logo o resto plausible.
+    for url in &tied {
+        if let Some(s) = suggestions.iter().find(|s| &s.url == url) {
+            if vistos.insert(s.url.clone()) {
+                out.push(s.clone());
+            }
+        }
+    }
+    for s in suggestions {
+        if out.len() >= MAX {
+            break;
+        }
+        if vistos.contains(&s.url) {
+            continue;
+        }
+        if comparte_token(&s.nombre) && vistos.insert(s.url.clone()) {
+            out.push(s.clone());
+        }
+    }
+    out.truncate(MAX);
+    out
 }
 
 /// Variantes do nome dun adxudicatario coas que buscar en datoscif. Para persoas
@@ -517,7 +725,9 @@ pub fn best_match(adx_nome: &str, suggestions: &[Suggestion]) -> (Option<String>
 /// casar co patrón de datoscif («APELIDO1 APELIDO2 NOME»), xa que a busca é por
 /// subcadea sobre o nome gardado.
 pub fn search_variants(adx_nome: &str) -> Vec<String> {
-    let key = company_key(adx_nome);
+    // Normalización «datoscif» (mantén o ñ): a busca está anclada ao inicio e o
+    // nome completo casa como prefixo.
+    let key = normalize_busca_datoscif(adx_nome);
     let mut out = vec![key.clone()];
     let toks: Vec<&str> = key.split_whitespace().collect();
     // Só ten sentido reordenar cando semella unha persoa: 2-4 tokens e sen
@@ -645,41 +855,72 @@ mod tests {
             sug("INDITEX SA", "inditex-sa", 1),
         ];
         // Exacta tras normalizar puntuación.
-        let (url, c) = best_match("Inditex Moda, S.L.", &cands);
-        assert_eq!(url.as_deref(), Some("inditex-moda-sl"));
-        assert_eq!(c, Confianza::Exacta);
+        assert_eq!(
+            match_suggestions("Inditex Moda, S.L.", &cands),
+            MatchResult::Unico("inditex-moda-sl".into(), Confianza::Exacta)
+        );
         // Núcleo: o adxudicatario trae outro sufixo (SLU) pero o núcleo casa.
-        let (url, c) = best_match("INDITEX MODA SLU", &cands);
-        assert_eq!(url.as_deref(), Some("inditex-moda-sl"));
-        assert_eq!(c, Confianza::Nucleo);
+        assert_eq!(
+            match_suggestions("INDITEX MODA SLU", &cands),
+            MatchResult::Unico("inditex-moda-sl".into(), Confianza::Nucleo)
+        );
     }
 
     #[test]
     fn match_persoa_reordenada_por_tokens() {
         // Contratos: «nome apelido1 apelido2»; datoscif: «apelido1 apelido2 nome».
         let cands = [sug("Garcia Lopez Manuel", "garcia-lopez-manuel", 2)];
-        let (url, c) = best_match("MANUEL GARCÍA LÓPEZ", &cands);
-        assert_eq!(url.as_deref(), Some("garcia-lopez-manuel"));
-        assert_eq!(c, Confianza::Tokens);
+        assert_eq!(
+            match_suggestions("MANUEL GARCÍA LÓPEZ", &cands),
+            MatchResult::Unico("garcia-lopez-manuel".into(), Confianza::Tokens)
+        );
     }
 
     #[test]
     fn match_ambiguo_non_vincula() {
-        // Dúas empresas distintas co mesmo núcleo: empate → ambigua, sen vínculo.
-        let cands = [
-            sug("Foo SL", "foo-sl", 1),
-            sug("Foo SA", "foo-sa", 1),
-        ];
-        let (url, c) = best_match("FOO", &cands);
-        assert_eq!(url, None);
-        assert_eq!(c, Confianza::Ambigua);
+        // Dúas empresas distintas co mesmo núcleo: empate → ambiguo (candidatos).
+        let cands = [sug("Foo SL", "foo-sl", 1), sug("Foo SA", "foo-sa", 1)];
+        assert_eq!(
+            match_suggestions("FOO", &cands),
+            MatchResult::Ambiguo(vec!["foo-sa".into(), "foo-sl".into()])
+        );
     }
 
     #[test]
     fn match_sen_candidatos() {
-        let (url, c) = best_match("Empresa Inexistente SL", &[]);
-        assert_eq!(url, None);
-        assert_eq!(c, Confianza::SenMatch);
+        assert_eq!(match_suggestions("Empresa Inexistente SL", &[]), MatchResult::Ningun);
+    }
+
+    #[test]
+    fn candidatos_de_revision_prioriza_empatados_e_filtra_ruido() {
+        let cands = [
+            sug("Talleres O Rosal SL", "talleres-o-rosal-sl", 1),
+            sug("Talleres O Rosal SA", "talleres-o-rosal-sa", 1),
+            sug("Panadería Lonxe SL", "panaderia-lonxe-sl", 1), // sen tokens comúns
+        ];
+        let r = review_candidates("Talleres O Rosal", &cands);
+        let urls: Vec<&str> = r.iter().map(|s| s.url.as_str()).collect();
+        // Os dous «rosal» (empatados por núcleo) entran; o ruído queda fóra.
+        assert!(urls.contains(&"talleres-o-rosal-sl"));
+        assert!(urls.contains(&"talleres-o-rosal-sa"));
+        assert!(!urls.contains(&"panaderia-lonxe-sl"));
+    }
+
+    #[test]
+    fn nif_kind_distingue_empresa_e_persoa() {
+        assert_eq!(nif_kind("B36881415"), Some(NifKind::Empresa));
+        assert_eq!(nif_kind("A28601094"), Some(NifKind::Empresa));
+        assert_eq!(nif_kind("12345678Z"), Some(NifKind::Persoa));
+        assert_eq!(nif_kind("X1234567L"), Some(NifKind::Persoa));
+        assert_eq!(nif_kind("b-36.881.415"), Some(NifKind::Empresa)); // normalízase
+        assert_eq!(nif_kind("LIXO"), None);
+    }
+
+    #[test]
+    fn termo_de_reserva_quita_sufixo_e_palabras_curtas() {
+        // Sufixo de razón social e palabras de 1-2 letras fóra.
+        assert_eq!(fallback_search_term("Talleres O Rosal, S.L."), "talleres rosal");
+        assert_eq!(fallback_search_term("INDITEX MODA SL"), "inditex moda");
     }
 
     #[test]
@@ -691,5 +932,34 @@ mod tests {
         // Unha empresa con sufixo non se reordena.
         let v = search_variants("Inditex Moda SL");
         assert_eq!(v, vec!["inditex moda sl".to_string()]);
+    }
+
+    #[test]
+    fn busca_datoscif_mantena_n_tilde_e_dobra_acentos() {
+        // Acentos agudos dóbranse; o ñ consérvase; S.A.D → sad.
+        assert_eq!(
+            normalize_busca_datoscif("CLUB BÁSQUET CORUÑA, S.A.D"),
+            "club basquet coruña sad"
+        );
+        // O sufixo SAD recoñécese; o núcleo conserva o ñ.
+        assert_eq!(
+            fallback_search_term("CLUB BÁSQUET CORUÑA, S.A.D"),
+            "club basquet coruña"
+        );
+    }
+
+    #[test]
+    fn club_sad_casa_coa_suxestion_de_datoscif() {
+        // O termo de busca conserva o ñ (para que datoscif o atope en Latin-1).
+        assert!(
+            search_variants("CLUB BÁSQUET CORUÑA, S.A.D")
+                .contains(&"club basquet coruña sad".to_string())
+        );
+        // E o emparellamento local casa (company_key dobra ñ→n en ambos lados).
+        let cands = [sug("CLUB BASQUET CORUÑA SAD", "club-basquet-coruna-sad", 1)];
+        assert_eq!(
+            match_suggestions("CLUB BÁSQUET CORUÑA, S.A.D", &cands),
+            MatchResult::Unico("club-basquet-coruna-sad".into(), Confianza::Exacta)
+        );
     }
 }

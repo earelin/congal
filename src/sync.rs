@@ -83,8 +83,11 @@ pub fn run_sync(
             break;
         }
         match scraper::fetch_detail(client, id) {
-            Ok((detail, resolucions)) => {
-                if let Err(e) = db.upsert_detail(&detail, &resolucions) {
+            Ok((detail, resolucions, utes)) => {
+                let r = db
+                    .upsert_detail(&detail, &resolucions)
+                    .and_then(|_| db.upsert_utes(&detail.contract_id, &utes));
+                if let Err(e) = r {
                     result.erros += 1;
                     let _ = tx.send(Event::Log(format!("Erro gardando {id}: {e}")));
                 } else {
@@ -122,7 +125,7 @@ mod live_tests {
         let client = Client::new().expect("cliente");
 
         // 1) Detalle dun contrato coñecido con adxudicatario.
-        let (d, res) = scraper::fetch_detail(&client, "824418").expect("detalle");
+        let (d, res, _utes) = scraper::fetch_detail(&client, "824418").expect("detalle");
         println!("referencia={} lotes_res={}", d.referencia, res.len());
         assert!(res.iter().any(|r| r.adxudicatario.contains("SOLTEC")));
 
