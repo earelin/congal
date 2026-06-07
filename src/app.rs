@@ -3,7 +3,7 @@
 
 use crate::db::{Db, DbStats, LocalOptions};
 use crate::model::{
-    CargoRow, ContractDetail, DatosCifEntidade, EstadoGroup, FilterOptions, Filters, LocalFilters,
+    CargoRow, ContractDetail, DatosCifEntidade, FilterOptions, Filters, LocalFilters,
     GrupoRelacion, LocalRow, Resolucion, format_importe,
 };
 use crate::scraper::DATOSCIF_BASE;
@@ -55,6 +55,11 @@ pub struct App {
     /// Vista de relacións: grupos (tramas) de razóns sociais interconectadas.
     relacions: Vec<GrupoRelacion>,
     relacions_loaded: bool,
+
+    /// Canle pola que o fío do diálogo nativo «Gardar como» devolve o destino
+    /// escollido (`None` se o usuario cancela). Está presente mentres o diálogo
+    /// está aberto; así o diálogo non bloquea o fío da interface.
+    export_rx: Option<std::sync::mpsc::Receiver<Option<std::path::PathBuf>>>,
 }
 
 /// Pestanas da vista principal. As dúas comparten os filtros do panel lateral.
@@ -114,6 +119,7 @@ impl App {
             tab: Tab::Contratos,
             relacions: Vec::new(),
             relacions_loaded: false,
+            export_rx: None,
         };
         app.refresh_local();
         app
@@ -170,6 +176,22 @@ impl App {
                 Event::Log(l) => self.logs.push(l),
             }
         }
+        // Resultado do diálogo nativo «Gardar como» (noutro fío para non
+        // bloquear a interface). Cando chega, arrincamos a exportación real.
+        let picked = self.export_rx.as_ref().map(|rx| rx.try_recv());
+        match picked {
+            Some(Ok(escolla)) => {
+                self.export_rx = None;
+                if let Some(path) = escolla {
+                    self.start_export(path);
+                }
+            }
+            Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => self.export_rx = None,
+            // Aínda non escolleu: seguimos pintando para non perder o resultado.
+            Some(Err(std::sync::mpsc::TryRecvError::Empty)) => ctx.request_repaint(),
+            None => {}
+        }
+
         if self.need_query {
             self.refresh_local();
             self.need_query = false;
@@ -177,6 +199,20 @@ impl App {
         if self.busy {
             ctx.request_repaint();
         }
+    }
+
+    /// Lanza a exportación a ODS no fío traballador e amosa o diálogo de progreso.
+    fn start_export(&mut self, path: std::path::PathBuf) {
+        self.busy = true;
+        self.progress = None;
+        self.progress_titulo = "Exportación a ODS";
+        self.logs.clear();
+        self.status = "Exportando a ODS…".into();
+        self.show_progress_dialog = true;
+        self.worker.send(Command::Export {
+            path,
+            filters: self.local.clone(),
+        });
     }
 
     fn refresh_local(&mut self) {
@@ -305,68 +341,32 @@ impl App {
     /// Modal de selección dos filtros de importación.
     fn import_dialog(&mut self, ctx: &egui::Context) {
         let modal = egui::Modal::new(egui::Id::new("import_dialog")).show(ctx, |ui| {
-            ui.set_width(720.0);
-            ui.heading("Importar datos");
+            ui.set_width(480.0);
+            ui.heading("Importar contratos");
             ui.label(
                 RichText::new(
-                    "Escolle os filtros dos contratos a descargar. Os contratos xa resoltos \
-                     non se volven descargar; só se actualizan os que seguían en proceso e os novos.",
+                    "Escolle o órgano de contratación (obrigatorio) e, opcionalmente, o ano. \
+                     Os contratos xa resoltos non se volven descargar; só se actualizan os que \
+                     seguían en proceso e os novos.",
                 )
                 .small()
                 .color(Color32::GRAY),
             );
+            ui.add_space(12.0);
+
+            ui.label(RichText::new("Órgano de contratación").strong());
+            combo_codigo(
+                ui,
+                "organo",
+                &mut self.filters.organo,
+                &self.options.organos,
+                self.combo_filtros.entry("organo".into()).or_default(),
+                false,
+            );
             ui.add_space(10.0);
 
-            ui.columns(2, |cols| {
-                // Columna esquerda: estado, ano e busca textual.
-                let ui = &mut cols[0];
-                ui.label(RichText::new("Estado").strong());
-                for g in EstadoGroup::ALL {
-                    let mut on = self.filters.estados.contains(&g);
-                    if ui.checkbox(&mut on, g.label()).changed() {
-                        if on {
-                            self.filters.estados.push(g);
-                        } else {
-                            self.filters.estados.retain(|x| *x != g);
-                        }
-                    }
-                }
-                ui.add_space(8.0);
-
-                ui.label(RichText::new("Ano").strong());
-                year_combo(ui, &mut self.filters.year);
-                ui.add_space(8.0);
-
-                ui.label(RichText::new("Busca textual (obxecto)").strong());
-                text_input(ui, &mut self.filters.asunto);
-                ui.add_space(8.0);
-
-                ui.label(RichText::new("Órgano de contratación").strong());
-                combo_codigo(
-                    ui,
-                    "organo",
-                    &mut self.filters.organo,
-                    &self.options.organos,
-                    self.combo_filtros.entry("organo".into()).or_default(),
-                );
-
-                // Columna dereita: clasificacións do contrato.
-                let ui = &mut cols[1];
-                ui.label(RichText::new("Tipo de contrato").strong());
-                combo_codigo(ui, "tc", &mut self.filters.tipo_contrato, &self.options.tipos_contrato, self.combo_filtros.entry("tc".into()).or_default());
-                ui.add_space(6.0);
-                ui.label(RichText::new("Tipo de procedemento").strong());
-                combo_codigo(ui, "tp", &mut self.filters.tipo_procedemento, &self.options.tipos_procedemento, self.combo_filtros.entry("tp".into()).or_default());
-                ui.add_space(6.0);
-                ui.label(RichText::new("Tipo de tramitación").strong());
-                combo_codigo(ui, "tt", &mut self.filters.tipo_tramitacion, &self.options.tipos_tramitacion, self.combo_filtros.entry("tt".into()).or_default());
-                ui.add_space(6.0);
-                ui.label(RichText::new("Sistema de contratación").strong());
-                combo_codigo(ui, "sc", &mut self.filters.sistema, &self.options.sistemas, self.combo_filtros.entry("sc".into()).or_default());
-                ui.add_space(6.0);
-                ui.label(RichText::new("Materia (CPV)").strong());
-                combo_codigo(ui, "cpv", &mut self.filters.materia, &self.options.materias, self.combo_filtros.entry("cpv".into()).or_default());
-            });
+            ui.label(RichText::new("Ano").strong());
+            year_combo(ui, &mut self.filters.year);
 
             if !self.options_loaded {
                 ui.add_space(6.0);
@@ -377,8 +377,10 @@ impl App {
             ui.separator();
             ui.add_space(6.0);
             ui.horizontal(|ui| {
+                // O órgano é obrigatorio para evitar importacións masivas.
+                let pode_importar = !self.busy && !self.filters.organo.trim().is_empty();
                 let importar = ui.add_enabled(
-                    !self.busy,
+                    pode_importar,
                     egui::Button::new(RichText::new("Importar").color(Color32::WHITE))
                         .fill(theme::accent(self.dark)),
                 );
@@ -391,9 +393,6 @@ impl App {
                     self.worker.send(Command::Sync(self.filters.clone()));
                     self.show_import_dialog = false;
                     self.show_progress_dialog = true;
-                }
-                if ui.button("Limpar filtros").clicked() {
-                    self.filters = Filters::default();
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if ui.button("Cancelar").clicked() {
@@ -545,23 +544,26 @@ impl App {
                 ui.add_space(10.0);
                 ui.separator();
                 let export = ui.add_enabled(
-                    !self.busy && !self.rows.is_empty(),
+                    !self.busy && !self.rows.is_empty() && self.export_rx.is_none(),
                     egui::Button::new(RichText::new("Exportar a ODS").color(Color32::WHITE))
                         .fill(theme::accent(self.dark)),
                 );
                 if export.clicked() {
-                    if let Some(path) = rfd::FileDialog::new()
-                        .add_filter("OpenDocument Spreadsheet", &["ods"])
-                        .set_file_name("contratos.ods")
-                        .save_file()
-                    {
-                        self.busy = true;
-                        self.status = "Exportando…".into();
-                        self.worker.send(Command::Export {
-                            path,
-                            filters: self.local.clone(),
-                        });
-                    }
+                    // O diálogo nativo «Gardar como» execútase noutro fío: se se
+                    // chamase aquí (no fío da interface) bloquearíao e o sistema
+                    // marcaría a app como «non responde». O destino devólvese pola
+                    // canle e recóllese en `drain_events`.
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    let ctx = ui.ctx().clone();
+                    std::thread::spawn(move || {
+                        let path = rfd::FileDialog::new()
+                            .add_filter("OpenDocument Spreadsheet", &["ods"])
+                            .set_file_name("contratos.ods")
+                            .save_file();
+                        let _ = tx.send(path);
+                        ctx.request_repaint();
+                    });
+                    self.export_rx = Some(rx);
                 }
                 ui.label(
                     RichText::new(format!("{} filas no resultado", self.rows.len()))
@@ -1185,12 +1187,18 @@ fn combo_codigo(
     selected: &mut String,
     options: &[(String, String)],
     filtro: &mut String,
+    permitir_todos: bool,
 ) {
+    let placeholder = if permitir_todos {
+        "(todos)"
+    } else {
+        "(escolle…)"
+    };
     let actual = options
         .iter()
         .find(|(c, _)| c == selected)
         .map(|(_, l)| l.as_str())
-        .unwrap_or("(todos)");
+        .unwrap_or(placeholder);
 
     // Flag en memoria para saber se o popup xa estaba aberto no frame anterior,
     // e así enfocar o campo de busca só no momento de abrilo.
@@ -1220,10 +1228,12 @@ fn combo_codigo(
             // Altura estable a partir do total de opcións (ver nota en `combo_valor`):
             // evita que o popup quede fixado nun tamaño pequeno tras filtrar.
             let row_h = ui.spacing().interact_size.y + ui.spacing().item_spacing.y;
-            let filas = (options.len() + 1).min(10); // +1 pola opción "(todos)"
+            let extra = if permitir_todos { 1 } else { 0 }; // +1 pola opción "(todos)"
+            let filas = (options.len() + extra).min(10);
             ui.set_min_height(filas as f32 * row_h);
-            // Ao seleccionar, limpamos o texto de busca e pechamos o popup.
-            if ui.selectable_label(selected.is_empty(), "(todos)").clicked() {
+            // Ao seleccionar, limpamos o texto de busca e pechamos o popup. A opción
+            // "(todos)" só se ofrece cando se permiten filtros baleiros.
+            if permitir_todos && ui.selectable_label(selected.is_empty(), "(todos)").clicked() {
                 selected.clear();
                 filtro.clear();
                 closing = true;

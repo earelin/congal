@@ -17,11 +17,6 @@ pub fn load_filter_options(client: &Client) -> Result<FilterOptions> {
 
     Ok(FilterOptions {
         organos: select_options(&html, "organoL"),
-        materias: select_options(&html, "materiaMultiSelect"),
-        tipos_contrato: select_options(&html, "tcLMultiSelect"),
-        tipos_procedemento: select_options(&html, "tpLMultiSelect"),
-        tipos_tramitacion: select_options(&html, "ttLMultiSelect"),
-        sistemas: select_options(&html, "scLMultiSelect"),
     })
 }
 

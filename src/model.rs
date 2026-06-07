@@ -30,15 +30,6 @@ impl EstadoGroup {
         }
     }
 
-    pub fn label(self) -> &'static str {
-        match self {
-            EstadoGroup::EnPrazo => "En prazo de presentación de ofertas",
-            EstadoGroup::Pendente => "Pendente de adxudicar",
-            EstadoGroup::Resoltos => "Resoltos",
-            EstadoGroup::Suspendidos => "Suspendidos por recurso",
-        }
-    }
-
     pub const ALL: [EstadoGroup; 4] = [
         EstadoGroup::EnPrazo,
         EstadoGroup::Pendente,
@@ -150,15 +141,12 @@ pub struct Resolucion {
     pub recurso: String,
 }
 
-/// Opcións dos despregables de filtro extraídas de `portada.jsp`.
+/// Opcións do despregable de órgano de contratación extraídas de `portada.jsp`.
+/// O formulario de importación só filtra por órgano (e ano), así que non se
+/// conservan as demais listas (materias, tipos…).
 #[derive(Debug, Clone, Default)]
 pub struct FilterOptions {
     pub organos: Vec<(String, String)>,
-    pub materias: Vec<(String, String)>,
-    pub tipos_contrato: Vec<(String, String)>,
-    pub tipos_procedemento: Vec<(String, String)>,
-    pub tipos_tramitacion: Vec<(String, String)>,
-    pub sistemas: Vec<(String, String)>,
 }
 
 /// Indica se un estado é terminal (resolto) e, polo tanto, non hai que
