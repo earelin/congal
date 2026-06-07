@@ -44,6 +44,43 @@ fn extract_year(s: &str) -> Option<String> {
     None
 }
 
+/// Constrúe a cláusula WHERE (e os seus argumentos posicionais) común á busca
+/// local a partir dos filtros. As condicións refírense aos alias `c` (contracts),
+/// `o` (organismos) e `e` (estados), que o chamador debe ter no FROM. Reutilízase
+/// tanto na táboa de contratos como na vista de relacións para que os filtros do
+/// panel lateral se apliquen ás dúas pestanas.
+fn local_where(f: &LocalFilters) -> (String, Vec<String>) {
+    let mut sql = String::new();
+    let mut args: Vec<String> = Vec::new();
+    if !f.texto.trim().is_empty() {
+        sql.push_str(" AND (nrm(c.asunto) LIKE ? OR nrm(c.referencia) LIKE ?)");
+        let like = format!("%{}%", normalize_search(&f.texto));
+        args.push(like.clone());
+        args.push(like);
+    }
+    if !f.organismo.trim().is_empty() {
+        sql.push_str(" AND nrm(o.nome) LIKE ?");
+        args.push(format!("%{}%", normalize_search(&f.organismo)));
+    }
+    if !f.estado.trim().is_empty() {
+        sql.push_str(" AND nrm(e.nome) LIKE ?");
+        args.push(format!("%{}%", normalize_search(&f.estado)));
+    }
+    if !f.year.trim().is_empty() {
+        sql.push_str(" AND c.data_publicacion LIKE ?");
+        args.push(format!("%{}%", f.year.trim()));
+    }
+    if !f.adxudicatario.trim().is_empty() {
+        // O contrato inclúese se ALGÚN dos seus lotes casa co adxudicatario.
+        sql.push_str(
+            " AND EXISTS (SELECT 1 FROM contract_resolucion x \
+               WHERE x.contract_id = c.id AND nrm(x.adxudicatario) LIKE ?)",
+        );
+        args.push(format!("%{}%", normalize_search(&f.adxudicatario)));
+    }
+    (sql, args)
+}
+
 impl Db {
     pub fn open(path: &Path) -> Result<Self> {
         let conn = Connection::open(path)?;
@@ -426,34 +463,8 @@ impl Db {
                ) r ON r.contract_id = c.id
                WHERE 1=1"#,
         );
-        let mut args: Vec<String> = Vec::new();
-        if !f.texto.trim().is_empty() {
-            sql.push_str(" AND (nrm(c.asunto) LIKE ?  OR nrm(c.referencia) LIKE ?)");
-            let like = format!("%{}%", normalize_search(&f.texto));
-            args.push(like.clone());
-            args.push(like);
-        }
-        if !f.organismo.trim().is_empty() {
-            sql.push_str(" AND nrm(o.nome) LIKE ?");
-            args.push(format!("%{}%", normalize_search(&f.organismo)));
-        }
-        if !f.estado.trim().is_empty() {
-            sql.push_str(" AND nrm(e.nome) LIKE ?");
-            args.push(format!("%{}%", normalize_search(&f.estado)));
-        }
-        if !f.year.trim().is_empty() {
-            sql.push_str(" AND c.data_publicacion LIKE ?");
-            args.push(format!("%{}%", f.year.trim()));
-        }
-        if !f.adxudicatario.trim().is_empty() {
-            // O contrato inclúese se ALGÚN dos seus lotes casa co adxudicatario;
-            // a fila segue amosando todos os adxudicatarios do contrato.
-            sql.push_str(
-                " AND EXISTS (SELECT 1 FROM contract_resolucion x \
-                   WHERE x.contract_id = c.id AND nrm(x.adxudicatario) LIKE ?)",
-            );
-            args.push(format!("%{}%", normalize_search(&f.adxudicatario)));
-        }
+        let (where_sql, args) = local_where(f);
+        sql.push_str(&where_sql);
         sql.push_str(" ORDER BY c.data_publicacion DESC, c.id DESC LIMIT 5000");
 
         let mut stmt = self.conn.prepare(&sql)?;
@@ -780,8 +791,13 @@ impl Db {
     /// Só as persoas que conectan ≥2 empresas forman arestas do grafo: así, dous
     /// administradores que controlan as mesmas empresas caen no mesmo grupo en
     /// vez de aparecer como dúas tarxetas case idénticas.
-    pub fn relacions_compartidas(&self) -> Result<Vec<GrupoRelacion>> {
-        let mut stmt = self.conn.prepare(
+    ///
+    /// Os `filtros` (os mesmos do panel lateral) limitan os contratos tidos en
+    /// conta: só contan as razóns sociais con polo menos un contrato que casa cos
+    /// filtros, de xeito que a vista de relacións reflicte o listado actual.
+    pub fn relacions_compartidas(&self, filtros: &LocalFilters) -> Result<Vec<GrupoRelacion>> {
+        let (where_sql, args) = local_where(filtros);
+        let sql = format!(
             r#"
             WITH empresa_contratos AS (
                 SELECT m.datoscif_url AS empresa_url,
@@ -789,6 +805,12 @@ impl Db {
                 FROM adxudicatario_match m
                 JOIN contract_resolucion r ON cokey(r.adxudicatario) = m.adx_key
                 WHERE m.datoscif_url IS NOT NULL
+                  AND r.contract_id IN (
+                      SELECT c.id FROM contracts c
+                      LEFT JOIN organismos o ON o.cod_organismo = c.cod_organismo
+                      LEFT JOIN estados e ON e.cod_estado = c.cod_estado
+                      WHERE 1=1{where_sql}
+                  )
                 GROUP BY m.datoscif_url
             ),
             persoa_empresas AS (
@@ -809,8 +831,11 @@ impl Db {
             JOIN empresa_contratos ec ON ec.empresa_url = pe.empresa_url
             LEFT JOIN datoscif_entidade per ON per.url = pe.persona_url
             LEFT JOIN datoscif_entidade emp ON emp.url = pe.empresa_url
-            "#,
-        )?;
+            "#
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let params_dyn: Vec<&dyn rusqlite::ToSql> =
+            args.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
 
         // Cada fila é unha aresta persoa↔empresa.
         struct Aresta {
@@ -822,7 +847,7 @@ impl Db {
             num_contratos: i64,
         }
         let arestas: Vec<Aresta> = stmt
-            .query_map([], |row| {
+            .query_map(params_dyn.as_slice(), |row| {
                 Ok(Aresta {
                     persona_url: row.get(0)?,
                     persona_nome: row.get(1)?,
@@ -1164,7 +1189,7 @@ mod tests {
             .expect("cargos");
         }
 
-        let rel = db.relacions_compartidas().expect("relacions");
+        let rel = db.relacions_compartidas(&LocalFilters::default()).expect("relacions");
         assert_eq!(rel.len(), 1, "debe haber un grupo relacionado");
         assert_eq!(rel[0].persoas.len(), 1, "unha soa persoa conecta o grupo");
         assert_eq!(rel[0].persoas[0].persona_url, "perez-perez-xan");
@@ -1251,11 +1276,84 @@ mod tests {
             .expect("cargos");
         }
 
-        let rel = db.relacions_compartidas().expect("relacions");
+        let rel = db.relacions_compartidas(&LocalFilters::default()).expect("relacions");
         assert_eq!(rel.len(), 1, "ambos administradores forman un único grupo");
         assert_eq!(rel[0].persoas.len(), 2, "as dúas persoas no mesmo grupo");
         assert_eq!(rel[0].empresas.len(), 2, "as dúas razóns sociais no grupo");
         assert!(rel[0].persoas.iter().all(|p| p.num_empresas == 2));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    // Os filtros do panel lateral tamén limitan a vista de relacións: ao filtrar
+    // por un ano que só inclúe un dos contratos, a outra empresa deixa de contar
+    // e a relación (que precisaba ≥2 empresas) desaparece.
+    #[test]
+    fn filtros_aplicanse_a_relacions() {
+        use crate::model::{CargoRow, DatosCifEntidade};
+        let path = std::env::temp_dir().join("congal_test_rel_filtros.sqlite");
+        let _ = std::fs::remove_file(&path);
+        let mut db = Db::open(&path).expect("db");
+
+        // Dous contratos en anos distintos, un por empresa.
+        db.upsert_summaries(
+            &[
+                summary("1", "obra", "Concello", "Formalizado", "01/02/2024"),
+                summary("2", "servizo", "Concello", "Formalizado", "03/04/2025"),
+            ],
+            "agora",
+        )
+        .expect("summaries");
+        db.upsert_detail(
+            &ContractDetail { contract_id: "1".into(), ..Default::default() },
+            &[Resolucion { adxudicatario: "Empresa A, S.L.".into(), ..Default::default() }],
+        )
+        .expect("detail 1");
+        db.upsert_detail(
+            &ContractDetail { contract_id: "2".into(), ..Default::default() },
+            &[Resolucion { adxudicatario: "EMPRESA B SL".into(), ..Default::default() }],
+        )
+        .expect("detail 2");
+
+        for (url, nome, adx) in [
+            ("empresa-a-sl", "EMPRESA A SL", "Empresa A, S.L."),
+            ("empresa-b-sl", "EMPRESA B SL", "EMPRESA B SL"),
+        ] {
+            db.upsert_datoscif_entidade(
+                &DatosCifEntidade {
+                    url: url.into(),
+                    nome: nome.into(),
+                    tipo_entidad: 1,
+                    uri: format!("/empresa/{url}"),
+                    ..Default::default()
+                },
+                true,
+                "agora",
+            )
+            .expect("entidade");
+            db.upsert_match(adx, Some(url), "exacta", "auto", "agora").expect("match");
+            db.upsert_cargos(
+                url,
+                &[CargoRow {
+                    persona_url: "xan".into(),
+                    persona_nome: "Xan".into(),
+                    cargo: "Administrador".into(),
+                    activo: true,
+                    ..Default::default()
+                }],
+                "agora",
+            )
+            .expect("cargos");
+        }
+
+        // Sen filtros: detéctase a relación (a persoa controla as dúas empresas).
+        let rel = db.relacions_compartidas(&LocalFilters::default()).expect("relacions");
+        assert_eq!(rel.len(), 1, "sen filtros hai unha relación");
+
+        // Filtrando por 2024 só conta a empresa A → xa non hai relación.
+        let filtros = LocalFilters { year: "2024".into(), ..Default::default() };
+        let rel = db.relacions_compartidas(&filtros).expect("relacions filtradas");
+        assert!(rel.is_empty(), "co filtro de ano a relación desaparece");
 
         let _ = std::fs::remove_file(&path);
     }

@@ -50,10 +50,20 @@ pub struct App {
     /// Info de datoscif (entidade + cargos) por adxudicatario do contrato aberto.
     selected_datoscif: Vec<AdxDatosCif>,
 
+    /// Pestana activa da vista principal.
+    tab: Tab,
     /// Vista de relacións: grupos (tramas) de razóns sociais interconectadas.
-    show_relacions: bool,
     relacions: Vec<GrupoRelacion>,
     relacions_loaded: bool,
+}
+
+/// Pestanas da vista principal. As dúas comparten os filtros do panel lateral.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Tab {
+    /// Listado de contratos (e o detalle dun contrato seleccionado).
+    Contratos,
+    /// Tramas de razóns sociais relacionadas entre si.
+    Relacions,
 }
 
 /// Datos de datoscif asociados a un adxudicatario dun contrato.
@@ -101,7 +111,7 @@ impl App {
             selected_row: None,
             selected_detail: None,
             selected_datoscif: Vec::new(),
-            show_relacions: false,
+            tab: Tab::Contratos,
             relacions: Vec::new(),
             relacions_loaded: false,
         };
@@ -219,7 +229,7 @@ impl App {
     }
 
     fn refresh_relacions(&mut self) {
-        self.relacions = self.db.relacions_compartidas().unwrap_or_default();
+        self.relacions = self.db.relacions_compartidas(&self.local).unwrap_or_default();
         self.relacions_loaded = true;
     }
 }
@@ -270,15 +280,6 @@ impl App {
                     );
                     if importar.clicked() {
                         self.show_import_dialog = true;
-                    }
-
-                    ui.add_space(8.0);
-                    let rel = ui.selectable_label(self.show_relacions, "🔗 Relacións");
-                    if rel.clicked() {
-                        self.show_relacions = !self.show_relacions;
-                        if self.show_relacions && !self.relacions_loaded {
-                            self.refresh_relacions();
-                        }
                     }
 
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -534,8 +535,11 @@ impl App {
                     changed = true;
                 }
                 // A busca execútase automaticamente cando cambia calquera filtro.
+                // Os filtros aplícanse ás dúas pestanas, así que invalidamos tamén
+                // a vista de relacións para que se recalcule co novo subconxunto.
                 if changed {
                     self.need_query = true;
+                    self.relacions_loaded = false;
                 }
 
                 ui.add_space(10.0);
@@ -592,12 +596,33 @@ impl App {
             });
 
         egui::CentralPanel::default().show_inside(ui, |ui| {
-            if self.show_relacions {
-                self.relacions_view(ui);
-            } else if self.selected.is_some() {
-                self.detail_view(ui);
-            } else {
-                self.results_table(ui);
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                if ui
+                    .selectable_label(self.tab == Tab::Contratos, "📄 Contratos")
+                    .clicked()
+                {
+                    self.tab = Tab::Contratos;
+                }
+                if ui
+                    .selectable_label(self.tab == Tab::Relacions, "🔗 Relacións")
+                    .clicked()
+                {
+                    self.tab = Tab::Relacions;
+                }
+            });
+            ui.add_space(4.0);
+            ui.separator();
+
+            match self.tab {
+                Tab::Contratos => {
+                    if self.selected.is_some() {
+                        self.detail_view(ui);
+                    } else {
+                        self.results_table(ui);
+                    }
+                }
+                Tab::Relacions => self.relacions_view(ui),
             }
         });
     }
@@ -789,13 +814,7 @@ impl App {
     /// aparecen como adxudicatarias nos contratos.
     fn relacions_view(&mut self, ui: &mut egui::Ui) {
         ui.add_space(6.0);
-        ui.horizontal(|ui| {
-            ui.heading("Relacións entre razóns sociais");
-            ui.add_space(8.0);
-            if ui.button("↻ Actualizar").clicked() {
-                self.refresh_relacions();
-            }
-        });
+        ui.heading("Relacións entre razóns sociais");
         ui.label(
             RichText::new(
                 "Grupos de razóns sociais conectadas entre si por persoas \
