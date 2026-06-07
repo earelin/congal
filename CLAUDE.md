@@ -21,7 +21,14 @@ cargo run                      # run the GUI in debug
 cargo test                     # unit/parsing tests (offline, run against HTML fixtures)
 cargo test importe_galego      # run a single test by name
 cargo test --release -- --ignored --nocapture live_end_to_end   # live network test (hits the real server)
+
+./script/ci.sh                 # corre en local as mesmas comprobacións que CI (fmt, clippy, build, test)
 ```
+
+**Antes de facer `git push`, executa sempre `./script/ci.sh`** e asegúrate de que pasa.
+Reproduce exactamente o pipeline de GitHub Actions (`.github/workflows/ci.yml`):
+`cargo fmt --check`, `cargo clippy` con `-D warnings`, build en release e tests. Se algunha
+comprobación falla, arránxaa antes de empuxar para non deixar o CI en vermello.
 
 The `live_end_to_end` test (in `src/sync.rs`) is `#[ignore]` by default because it requires
 network access and exercises a full search → detail → DB → ODS export cycle against a

@@ -61,7 +61,11 @@ mod tests {
 
         let organos = select_options(&html, "organoL");
         assert!(organos.len() > 300, "organos={}", organos.len());
-        assert!(organos.iter().any(|(c, l)| c == "48" && l.contains("AGASP")));
+        assert!(
+            organos
+                .iter()
+                .any(|(c, l)| c == "48" && l.contains("AGASP"))
+        );
 
         assert_eq!(select_options(&html, "tcLMultiSelect").len(), 7);
         assert_eq!(select_options(&html, "scLMultiSelect").len(), 4);

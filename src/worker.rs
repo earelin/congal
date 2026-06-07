@@ -103,7 +103,8 @@ impl Worker {
                             let _ = tx_evt.send(Event::Options(o));
                         }
                         Err(e) => {
-                            let _ = tx_evt.send(Event::Error(format!("Erro cargando filtros: {e}")));
+                            let _ =
+                                tx_evt.send(Event::Error(format!("Erro cargando filtros: {e}")));
                         }
                     },
                     Command::Sync(filters) => {
@@ -160,9 +161,9 @@ impl Worker {
                         }
                     }
                     Command::Export { path, filters } => {
-                        let res = db
-                            .query_local(&filters)
-                            .and_then(|rows| crate::export::export_ods(&path, &rows).map(|_| rows.len()));
+                        let res = db.query_local(&filters).and_then(|rows| {
+                            crate::export::export_ods(&path, &rows).map(|_| rows.len())
+                        });
                         match res {
                             Ok(n) => {
                                 let _ = tx_evt.send(Event::Exported(path, n));

@@ -64,22 +64,29 @@ pub fn install_fonts(ctx: &egui::Context) {
 
 /// Aplica o tema completo (fontes, tipografía, espazado e cores).
 pub fn apply(ctx: &egui::Context, dark: bool) {
-    let mut style = egui::Style::default();
-
-    style.text_styles = [
-        (
-            TextStyle::Heading,
-            FontId::new(21.0, FontFamily::Name("semibold".into())),
-        ),
-        (TextStyle::Body, FontId::new(14.5, FontFamily::Proportional)),
-        (
-            TextStyle::Button,
-            FontId::new(14.5, FontFamily::Name("medium".into())),
-        ),
-        (TextStyle::Monospace, FontId::new(13.0, FontFamily::Monospace)),
-        (TextStyle::Small, FontId::new(12.0, FontFamily::Proportional)),
-    ]
-    .into();
+    let mut style = egui::Style {
+        text_styles: [
+            (
+                TextStyle::Heading,
+                FontId::new(21.0, FontFamily::Name("semibold".into())),
+            ),
+            (TextStyle::Body, FontId::new(14.5, FontFamily::Proportional)),
+            (
+                TextStyle::Button,
+                FontId::new(14.5, FontFamily::Name("medium".into())),
+            ),
+            (
+                TextStyle::Monospace,
+                FontId::new(13.0, FontFamily::Monospace),
+            ),
+            (
+                TextStyle::Small,
+                FontId::new(12.0, FontFamily::Proportional),
+            ),
+        ]
+        .into(),
+        ..Default::default()
+    };
 
     // Ritmo e espazado xenerosos (retícula base ~8px).
     let s = &mut style.spacing;
@@ -91,7 +98,11 @@ pub fn apply(ctx: &egui::Context, dark: bool) {
     s.indent = 18.0;
     s.scroll.bar_width = 9.0;
 
-    style.visuals = if dark { dark_visuals() } else { light_visuals() };
+    style.visuals = if dark {
+        dark_visuals()
+    } else {
+        light_visuals()
+    };
     ctx.set_global_style(style);
 }
 

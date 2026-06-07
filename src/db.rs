@@ -36,9 +36,7 @@ pub struct LocalOptions {
 fn extract_year(s: &str) -> Option<String> {
     let b = s.as_bytes();
     for w in b.windows(4) {
-        if w.iter().all(|c| c.is_ascii_digit())
-            && (w.starts_with(b"19") || w.starts_with(b"20"))
-        {
+        if w.iter().all(|c| c.is_ascii_digit()) && (w.starts_with(b"19") || w.starts_with(b"20")) {
             return Some(String::from_utf8_lossy(w).into_owned());
         }
     }
@@ -119,9 +117,7 @@ impl Db {
     /// Volca o WAL ao ficheiro principal e trúncao. Útil ao pechar a aplicación
     /// para non deixar atrás os ficheiros `-wal`/`-shm` cheos.
     pub fn checkpoint(&self) {
-        let _ = self
-            .conn
-            .pragma_update(None, "wal_checkpoint", "TRUNCATE");
+        let _ = self.conn.pragma_update(None, "wal_checkpoint", "TRUNCATE");
     }
 
     fn init_schema(&self) -> Result<()> {
@@ -313,8 +309,7 @@ impl Db {
 
             // Despois os estados (a FK de `contracts` apunta a esta táboa). O
             // `cod_estado` asígnase soa; aquí só garantimos que cada nome exista.
-            let mut est_stmt =
-                tx.prepare(r#"INSERT OR IGNORE INTO estados (nome) VALUES (?1)"#)?;
+            let mut est_stmt = tx.prepare(r#"INSERT OR IGNORE INTO estados (nome) VALUES (?1)"#)?;
             for r in rows {
                 if !r.estado.trim().is_empty() {
                     est_stmt.execute(params![r.estado.trim()])?;
@@ -359,11 +354,7 @@ impl Db {
     }
 
     /// Garda o detalle e substitúe as resolucións dun contrato.
-    pub fn upsert_detail(
-        &mut self,
-        d: &ContractDetail,
-        resolucions: &[Resolucion],
-    ) -> Result<()> {
+    pub fn upsert_detail(&mut self, d: &ContractDetail, resolucions: &[Resolucion]) -> Result<()> {
         let extra_json = serde_json::to_string(&d.extra).unwrap_or_else(|_| "{}".to_string());
         let tx = self.conn.transaction()?;
         // Garantir que existe a fila do contrato (evita violar a FK se aínda non
@@ -392,10 +383,23 @@ impl Db {
                  lei_aplicacion=excluded.lei_aplicacion,
                  enlace_resolucion=excluded.enlace_resolucion, extra_json=excluded.extra_json"#,
             params![
-                d.contract_id, d.referencia, d.obxecto, d.tipo_tramitacion,
-                d.tipo_procedemento, d.tipo_contrato, d.orzamento_base, d.valor_estimado,
-                d.num_lotes, d.sistema_contratacion, d.observacions, d.data_difusion,
-                d.sara, d.centralizada, d.lei_aplicacion, d.enlace_resolucion, extra_json,
+                d.contract_id,
+                d.referencia,
+                d.obxecto,
+                d.tipo_tramitacion,
+                d.tipo_procedemento,
+                d.tipo_contrato,
+                d.orzamento_base,
+                d.valor_estimado,
+                d.num_lotes,
+                d.sistema_contratacion,
+                d.observacions,
+                d.data_difusion,
+                d.sara,
+                d.centralizada,
+                d.lei_aplicacion,
+                d.enlace_resolucion,
+                extra_json,
             ],
         )?;
         tx.execute(
@@ -444,9 +448,9 @@ impl Db {
     }
 
     pub fn stats(&self) -> Result<DbStats> {
-        let total: i64 =
-            self.conn
-                .query_row("SELECT COUNT(*) FROM contracts", [], |r| r.get(0))?;
+        let total: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM contracts", [], |r| r.get(0))?;
         let con_detalle: i64 = self.conn.query_row(
             "SELECT COUNT(*) FROM contracts WHERE detalle_descargado = 1",
             [],
@@ -670,7 +674,10 @@ impl Db {
     /// Substitúe a composición das UTE dun contrato. Bórraa se a lista é baleira.
     pub fn upsert_utes(&mut self, contract_id: &str, utes: &[Ute]) -> Result<()> {
         let tx = self.conn.transaction()?;
-        tx.execute("DELETE FROM ute_membro WHERE contract_id = ?1", params![contract_id])?;
+        tx.execute(
+            "DELETE FROM ute_membro WHERE contract_id = ?1",
+            params![contract_id],
+        )?;
         {
             let mut stmt = tx.prepare(
                 r#"INSERT OR IGNORE INTO ute_membro
@@ -680,14 +687,7 @@ impl Db {
             for u in utes {
                 let key = company_key(&u.nome);
                 for m in &u.membros {
-                    stmt.execute(params![
-                        contract_id,
-                        key,
-                        u.nome,
-                        u.nif,
-                        m.cif,
-                        m.nome
-                    ])?;
+                    stmt.execute(params![contract_id, key, u.nome, u.nif, m.cif, m.nome])?;
                 }
             }
         }
@@ -780,7 +780,14 @@ impl Db {
                    VALUES (?1,?2,?3,?4,?5,?6)"#,
             )?;
             for (i, c) in candidatos.iter().enumerate() {
-                stmt.execute(params![key, c.url, c.nombre, c.tipo_entidad, c.uri, i as i64])?;
+                stmt.execute(params![
+                    key,
+                    c.url,
+                    c.nombre,
+                    c.tipo_entidad,
+                    c.uri,
+                    i as i64
+                ])?;
             }
         }
         tx.commit()?;
@@ -908,7 +915,12 @@ impl Db {
     /// Substitúe os cargos dunha empresa e dá de alta as persoas implicadas.
     /// Garante que existe a fila da empresa en `datoscif_entidade` (as FK de
     /// `datoscif_cargo` apuntan a ela), sen pisar os datos se xa existe.
-    pub fn upsert_cargos(&mut self, empresa_url: &str, cargos: &[CargoRow], now: &str) -> Result<()> {
+    pub fn upsert_cargos(
+        &mut self,
+        empresa_url: &str,
+        cargos: &[CargoRow],
+        now: &str,
+    ) -> Result<()> {
         let tx = self.conn.transaction()?;
         // A empresa pode aínda non estar gardada; créase cun nome provisional
         // (o `enrich` actualízao despois cos datos reais).
@@ -1048,7 +1060,10 @@ impl Db {
 
     /// Membros das UTE adxudicatarias dun contrato: `(ute_nome, membro_nome,
     /// membro_cif)`, para reflectir a composición na ficha do contrato.
-    pub fn ute_membros_de_contrato(&self, contract_id: &str) -> Result<Vec<(String, String, String)>> {
+    pub fn ute_membros_de_contrato(
+        &self,
+        contract_id: &str,
+    ) -> Result<Vec<(String, String, String)>> {
         let mut stmt = self.conn.prepare(
             r#"SELECT ute_nome, membro_nome, membro_cif
                FROM ute_membro WHERE contract_id = ?1
@@ -1056,7 +1071,11 @@ impl Db {
         )?;
         let out = stmt
             .query_map(params![contract_id], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(out)
@@ -1139,10 +1158,7 @@ impl Db {
             let mut stmt = self.conn.prepare(&emp_sql)?;
             let mut rows = stmt.query(params().as_slice())?;
             while let Some(row) = rows.next()? {
-                emp_meta.insert(
-                    row.get(0)?,
-                    (row.get(1)?, row.get(2)?, row.get(3)?),
-                );
+                emp_meta.insert(row.get(0)?, (row.get(1)?, row.get(2)?, row.get(3)?));
             }
         }
 
@@ -1206,7 +1222,10 @@ impl Db {
                 let mnome: String = row.get(4)?;
                 if actual.as_ref() != Some(&(cid.clone(), ukey.clone())) {
                     actual = Some((cid.clone(), ukey.clone()));
-                    utes.push(UteGrupo { nome, membros: Vec::new() });
+                    utes.push(UteGrupo {
+                        nome,
+                        membros: Vec::new(),
+                    });
                 }
                 utes.last_mut().unwrap().membros.push((murl, mnome));
             }
@@ -1255,7 +1274,9 @@ impl Db {
         // Flags de cargo por empresa (para distinguir vínculo histórico de UTE).
         let mut emp_cargo: HashMap<String, (bool, bool)> = HashMap::new(); // (con_cargos, activa)
         for a in &arestas {
-            let f = emp_cargo.entry(a.empresa_url.clone()).or_insert((false, false));
+            let f = emp_cargo
+                .entry(a.empresa_url.clone())
+                .or_insert((false, false));
             f.0 = true;
             f.1 |= a.activo;
         }
@@ -1366,7 +1387,9 @@ impl Db {
                     continue;
                 };
                 let root = find(&mut parent, node);
-                let Some(b) = grupos.get_mut(&root) else { continue };
+                let Some(b) = grupos.get_mut(&root) else {
+                    continue;
+                };
                 let contract_id: String = row.get(1)?;
                 // Un contrato cóntase unha soa vez por grupo (a UTE ten varios membros).
                 if !b.contratos_vistos.insert(contract_id.clone()) {
@@ -1390,9 +1413,17 @@ impl Db {
             .into_values()
             .map(|b| {
                 let mut persoas: Vec<PersoaNodo> = b.persoas.into_values().collect();
-                persoas.sort_by(|a, b| a.persona_nome.to_lowercase().cmp(&b.persona_nome.to_lowercase()));
+                persoas.sort_by(|a, b| {
+                    a.persona_nome
+                        .to_lowercase()
+                        .cmp(&b.persona_nome.to_lowercase())
+                });
                 let mut empresas: Vec<EmpresaNodo> = b.empresas.into_values().collect();
-                empresas.sort_by(|a, b| a.empresa_nome.to_lowercase().cmp(&b.empresa_nome.to_lowercase()));
+                empresas.sort_by(|a, b| {
+                    a.empresa_nome
+                        .to_lowercase()
+                        .cmp(&b.empresa_nome.to_lowercase())
+                });
                 let importe_total = b.contratos.iter().map(|c| c.importe_num).sum();
                 GrupoRelacion {
                     persoas,
@@ -1404,7 +1435,8 @@ impl Db {
             })
             .collect();
         out.sort_by(|a, b| {
-            let contratos = |g: &GrupoRelacion| g.empresas.iter().map(|e| e.num_contratos).sum::<i64>();
+            let contratos =
+                |g: &GrupoRelacion| g.empresas.iter().map(|e| e.num_contratos).sum::<i64>();
             b.empresas
                 .len()
                 .cmp(&a.empresas.len())
@@ -1418,7 +1450,13 @@ impl Db {
 mod tests {
     use super::*;
 
-    fn summary(id: &str, asunto: &str, organismo: &str, estado: &str, pub_: &str) -> ContractSummary {
+    fn summary(
+        id: &str,
+        asunto: &str,
+        organismo: &str,
+        estado: &str,
+        pub_: &str,
+    ) -> ContractSummary {
         ContractSummary {
             id: id.into(),
             referencia: format!("R{id}"),
@@ -1492,22 +1530,47 @@ mod tests {
         )
         .expect("sum");
         db.upsert_detail(
-            &ContractDetail { contract_id: "1".into(), ..Default::default() },
-            &[Resolucion { participacion: "1".into(), adxudicatario: "X SL".into(), ..Default::default() }],
+            &ContractDetail {
+                contract_id: "1".into(),
+                ..Default::default()
+            },
+            &[Resolucion {
+                participacion: "1".into(),
+                adxudicatario: "X SL".into(),
+                ..Default::default()
+            }],
         )
         .expect("d1");
         db.upsert_detail(
-            &ContractDetail { contract_id: "2".into(), ..Default::default() },
-            &[Resolucion { participacion: "3".into(), adxudicatario: "Y SL".into(), ..Default::default() }],
+            &ContractDetail {
+                contract_id: "2".into(),
+                ..Default::default()
+            },
+            &[Resolucion {
+                participacion: "3".into(),
+                adxudicatario: "Y SL".into(),
+                ..Default::default()
+            }],
         )
         .expect("d2");
         // O contrato 4 ten dous lotes: un cun único participante e outro con
         // participación descoñecida (baleira). Non debe marcarse.
         db.upsert_detail(
-            &ContractDetail { contract_id: "4".into(), ..Default::default() },
+            &ContractDetail {
+                contract_id: "4".into(),
+                ..Default::default()
+            },
             &[
-                Resolucion { participacion: "1".into(), adxudicatario: "Z SL".into(), ..Default::default() },
-                Resolucion { participacion: "".into(), adxudicatario: "W SL".into(), ..Default::default() },
+                Resolucion {
+                    participacion: "1".into(),
+                    adxudicatario: "Z SL".into(),
+                    ..Default::default()
+                },
+                Resolucion {
+                    participacion: "".into(),
+                    adxudicatario: "W SL".into(),
+                    ..Default::default()
+                },
             ],
         )
         .expect("d4");
@@ -1518,7 +1581,10 @@ mod tests {
         assert!(unico("1"), "1 participante → marcado");
         assert!(!unico("2"), "3 participantes → non marcado");
         assert!(!unico("3"), "sen resolución → non marcado");
-        assert!(!unico("4"), "lote con participación descoñecida → non marcado");
+        assert!(
+            !unico("4"),
+            "lote con participación descoñecida → non marcado"
+        );
 
         let _ = std::fs::remove_file(&path);
     }
@@ -1541,17 +1607,29 @@ mod tests {
         )
         .expect("sum");
         let ids = |f: &LocalFilters| -> Vec<String> {
-            db.query_local(f).unwrap().into_iter().map(|r| r.id).collect()
+            db.query_local(f)
+                .unwrap()
+                .into_iter()
+                .map(|r| r.id)
+                .collect()
         };
 
-        let mut f = LocalFilters { sort_col: SortColumn::Id, sort_asc: true, ..Default::default() };
+        let mut f = LocalFilters {
+            sort_col: SortColumn::Id,
+            sort_asc: true,
+            ..Default::default()
+        };
         assert_eq!(ids(&f), ["2", "10", "100"], "ID ascendente numérico");
         f.sort_asc = false;
         assert_eq!(ids(&f), ["100", "10", "2"], "ID descendente numérico");
 
         f.sort_col = SortColumn::Data;
         f.sort_asc = true;
-        assert_eq!(ids(&f), ["10", "100", "2"], "data cronolóxica (01/02, 02/02, 03/02)");
+        assert_eq!(
+            ids(&f),
+            ["10", "100", "2"],
+            "data cronolóxica (01/02, 02/02, 03/02)"
+        );
 
         let _ = std::fs::remove_file(&path);
     }
@@ -1574,7 +1652,8 @@ mod tests {
             cod_organismo: "ORG1".into(),
             organismo: "Concello da Coruña".into(),
         };
-        db.upsert_summaries(&[s], "2025-03-16 10:00:00").expect("upsert");
+        db.upsert_summaries(&[s], "2025-03-16 10:00:00")
+            .expect("upsert");
 
         // O organismo quedou na súa táboa e aparece nas opcións locais.
         let opts = db.local_options().expect("options");
@@ -1610,9 +1689,21 @@ mod tests {
         db.upsert_summaries(
             &[
                 summary("1", "obra", "Concello", "Formalizado", "01/02/2025"),
-                summary("2", "servizo", "Deputación", "Pendente de adxudicar", "03/04/2024"),
+                summary(
+                    "2",
+                    "servizo",
+                    "Deputación",
+                    "Pendente de adxudicar",
+                    "03/04/2024",
+                ),
                 // Mesmo estado que o 1: comparte `cod_estado`, non duplica fila.
-                summary("3", "subministración", "Concello", "Formalizado", "05/06/2025"),
+                summary(
+                    "3",
+                    "subministración",
+                    "Concello",
+                    "Formalizado",
+                    "05/06/2025",
+                ),
             ],
             "agora",
         )
@@ -1622,7 +1713,10 @@ mod tests {
         let opts = db.local_options().expect("options");
         assert_eq!(
             opts.estados,
-            vec!["Formalizado".to_string(), "Pendente de adxudicar".to_string()]
+            vec![
+                "Formalizado".to_string(),
+                "Pendente de adxudicar".to_string()
+            ]
         );
 
         // O nome do estado cárgase vía JOIN na consulta local.
@@ -1631,7 +1725,10 @@ mod tests {
         assert_eq!(r1.estado, "Formalizado");
 
         // `estado_previo` devolve o texto (úsao a sync para `is_estado_terminal`).
-        assert_eq!(db.estado_previo("2").expect("previo").as_deref(), Some("Pendente de adxudicar"));
+        assert_eq!(
+            db.estado_previo("2").expect("previo").as_deref(),
+            Some("Pendente de adxudicar")
+        );
         assert_eq!(db.estado_previo("descoñecido").expect("previo"), None);
 
         // Filtro por estado, insensible a maiúsculas/acentos.
@@ -1688,12 +1785,21 @@ mod tests {
         let mut db = Db::open(&path).expect("db");
 
         db.upsert_summaries(
-            &[summary("1", "obra", "Concello", "Formalizado", "01/02/2025")],
+            &[summary(
+                "1",
+                "obra",
+                "Concello",
+                "Formalizado",
+                "01/02/2025",
+            )],
             "agora",
         )
         .expect("summaries");
         db.upsert_detail(
-            &ContractDetail { contract_id: "1".into(), ..Default::default() },
+            &ContractDetail {
+                contract_id: "1".into(),
+                ..Default::default()
+            },
             &[Resolucion {
                 adxudicatario: "Talleres O Rosal SL".into(),
                 nif: "B36881415".into(),
@@ -1703,8 +1809,14 @@ mod tests {
         .expect("detail");
 
         // Caso en revisión con dous candidatos.
-        db.upsert_match("Talleres O Rosal SL", None, "ambigua", EstadoMatch::Revisar.as_str(), "agora")
-            .expect("match");
+        db.upsert_match(
+            "Talleres O Rosal SL",
+            None,
+            "ambigua",
+            EstadoMatch::Revisar.as_str(),
+            "agora",
+        )
+        .expect("match");
         db.upsert_candidatos(
             "Talleres O Rosal SL",
             &[
@@ -1768,12 +1880,21 @@ mod tests {
         let mut db = Db::open(&path).expect("db");
 
         db.upsert_summaries(
-            &[summary("1", "obra", "Concello", "Formalizado", "01/02/2025")],
+            &[summary(
+                "1",
+                "obra",
+                "Concello",
+                "Formalizado",
+                "01/02/2025",
+            )],
             "agora",
         )
         .expect("summaries");
         db.upsert_detail(
-            &ContractDetail { contract_id: "1".into(), ..Default::default() },
+            &ContractDetail {
+                contract_id: "1".into(),
+                ..Default::default()
+            },
             &[Resolucion {
                 adxudicatario: "Empresa Rara SL".into(),
                 nif: "B11111111".into(),
@@ -1782,8 +1903,14 @@ mod tests {
         )
         .expect("detail");
 
-        db.upsert_match("Empresa Rara SL", None, "sen_match", EstadoMatch::Pendente.as_str(), "agora")
-            .expect("match");
+        db.upsert_match(
+            "Empresa Rara SL",
+            None,
+            "sen_match",
+            EstadoMatch::Pendente.as_str(),
+            "agora",
+        )
+        .expect("match");
 
         let sen = db.casos_sen_match().expect("sen_match");
         assert_eq!(sen.len(), 1);
@@ -1815,7 +1942,10 @@ mod tests {
         )
         .expect("summaries");
         db.upsert_detail(
-            &ContractDetail { contract_id: "1".into(), ..Default::default() },
+            &ContractDetail {
+                contract_id: "1".into(),
+                ..Default::default()
+            },
             &[Resolucion {
                 adxudicatario: "Empresa A, S.L.".into(),
                 importe_num: Some(1000.0),
@@ -1824,7 +1954,10 @@ mod tests {
         )
         .expect("detail 1");
         db.upsert_detail(
-            &ContractDetail { contract_id: "2".into(), ..Default::default() },
+            &ContractDetail {
+                contract_id: "2".into(),
+                ..Default::default()
+            },
             &[Resolucion {
                 adxudicatario: "EMPRESA B SL".into(),
                 importe_num: Some(2500.5),
@@ -1852,7 +1985,8 @@ mod tests {
                 "agora",
             )
             .expect("entidade");
-            db.upsert_match(adx, Some(url), "exacta", "auto", "agora").expect("match");
+            db.upsert_match(adx, Some(url), "exacta", "auto", "agora")
+                .expect("match");
             // A mesma persoa administra ambas empresas.
             db.upsert_cargos(
                 url,
@@ -1868,18 +2002,29 @@ mod tests {
             .expect("cargos");
         }
 
-        let rel = db.relacions_compartidas(&LocalFilters::default()).expect("relacions");
+        let rel = db
+            .relacions_compartidas(&LocalFilters::default())
+            .expect("relacions");
         assert_eq!(rel.len(), 1, "debe haber un grupo relacionado");
         assert_eq!(rel[0].persoas.len(), 1, "unha soa persoa conecta o grupo");
         assert_eq!(rel[0].persoas[0].persona_url, "perez-perez-xan");
-        assert_eq!(rel[0].persoas[0].num_empresas, 2, "controla dúas razóns sociais");
+        assert_eq!(
+            rel[0].persoas[0].num_empresas, 2,
+            "controla dúas razóns sociais"
+        );
         assert_eq!(rel[0].empresas.len(), 2, "dúas razóns sociais no grupo");
         assert!(rel[0].empresas.iter().all(|e| e.num_contratos == 1));
         // O despregable de contratos do grupo reúne ambas adxudicacións e suma os importes.
         assert_eq!(rel[0].contratos.len(), 2, "os dous contratos do grupo");
-        assert_eq!(rel[0].importe_total, 3500.5, "suma dos importes adxudicados");
-        let ids: std::collections::HashSet<&str> =
-            rel[0].contratos.iter().map(|c| c.contract_id.as_str()).collect();
+        assert_eq!(
+            rel[0].importe_total, 3500.5,
+            "suma dos importes adxudicados"
+        );
+        let ids: std::collections::HashSet<&str> = rel[0]
+            .contratos
+            .iter()
+            .map(|c| c.contract_id.as_str())
+            .collect();
         assert_eq!(ids, std::collections::HashSet::from(["1", "2"]));
 
         // E a entidade recupérase desde o nome do adxudicatario (insensible a puntuación).
@@ -1910,13 +2055,25 @@ mod tests {
         )
         .expect("summaries");
         db.upsert_detail(
-            &ContractDetail { contract_id: "1".into(), ..Default::default() },
-            &[Resolucion { adxudicatario: "Empresa A, S.L.".into(), ..Default::default() }],
+            &ContractDetail {
+                contract_id: "1".into(),
+                ..Default::default()
+            },
+            &[Resolucion {
+                adxudicatario: "Empresa A, S.L.".into(),
+                ..Default::default()
+            }],
         )
         .expect("detail 1");
         db.upsert_detail(
-            &ContractDetail { contract_id: "2".into(), ..Default::default() },
-            &[Resolucion { adxudicatario: "EMPRESA B SL".into(), ..Default::default() }],
+            &ContractDetail {
+                contract_id: "2".into(),
+                ..Default::default()
+            },
+            &[Resolucion {
+                adxudicatario: "EMPRESA B SL".into(),
+                ..Default::default()
+            }],
         )
         .expect("detail 2");
 
@@ -1936,7 +2093,8 @@ mod tests {
                 "agora",
             )
             .expect("entidade");
-            db.upsert_match(adx, Some(url), "exacta", "auto", "agora").expect("match");
+            db.upsert_match(adx, Some(url), "exacta", "auto", "agora")
+                .expect("match");
             db.upsert_cargos(
                 url,
                 &[CargoRow {
@@ -1944,7 +2102,11 @@ mod tests {
                     persona_nome: "Perez Perez Xan".into(),
                     cargo: "Administrador Único".into(),
                     activo,
-                    hasta: if activo { String::new() } else { "2020-01-01".into() },
+                    hasta: if activo {
+                        String::new()
+                    } else {
+                        "2020-01-01".into()
+                    },
                     ..Default::default()
                 }],
                 "agora",
@@ -1952,15 +2114,25 @@ mod tests {
             .expect("cargos");
         }
 
-        let rel = db.relacions_compartidas(&LocalFilters::default()).expect("relacions");
+        let rel = db
+            .relacions_compartidas(&LocalFilters::default())
+            .expect("relacions");
         assert_eq!(rel.len(), 1);
         let g = &rel[0];
         // A persoa ten un vínculo actual e outro pasado.
         assert_eq!(g.persoas[0].empresas_activas, 1);
         assert_eq!(g.persoas[0].empresas_pasadas, 1);
         // A empresa A está activa; a B só ten cargos pasados.
-        let a = g.empresas.iter().find(|e| e.empresa_url == "empresa-a-sl").unwrap();
-        let b = g.empresas.iter().find(|e| e.empresa_url == "empresa-b-sl").unwrap();
+        let a = g
+            .empresas
+            .iter()
+            .find(|e| e.empresa_url == "empresa-a-sl")
+            .unwrap();
+        let b = g
+            .empresas
+            .iter()
+            .find(|e| e.empresa_url == "empresa-b-sl")
+            .unwrap();
         assert!(a.activa, "A ten cargo vixente");
         assert!(!b.activa, "B só ten cargo cesado (histórico)");
 
@@ -1977,13 +2149,22 @@ mod tests {
         let mut db = Db::open(&path).expect("db");
 
         db.upsert_summaries(
-            &[summary("1", "obra", "Concello", "Formalizado", "01/02/2025")],
+            &[summary(
+                "1",
+                "obra",
+                "Concello",
+                "Formalizado",
+                "01/02/2025",
+            )],
             "agora",
         )
         .expect("summaries");
         // O adxudicatario é a UTE.
         db.upsert_detail(
-            &ContractDetail { contract_id: "1".into(), ..Default::default() },
+            &ContractDetail {
+                contract_id: "1".into(),
+                ..Default::default()
+            },
             &[Resolucion {
                 adxudicatario: "UTE A - B".into(),
                 importe_num: Some(1000.0),
@@ -2016,14 +2197,22 @@ mod tests {
                 nome: "UTE A - B".into(),
                 nif: "U12345678".into(),
                 membros: vec![
-                    UteMembro { cif: "A11111111".into(), nome: "EMPRESA A".into() },
-                    UteMembro { cif: "B22222222".into(), nome: "EMPRESA B".into() },
+                    UteMembro {
+                        cif: "A11111111".into(),
+                        nome: "EMPRESA A".into(),
+                    },
+                    UteMembro {
+                        cif: "B22222222".into(),
+                        nome: "EMPRESA B".into(),
+                    },
                 ],
             }],
         )
         .expect("utes");
 
-        let rel = db.relacions_compartidas(&LocalFilters::default()).expect("rel");
+        let rel = db
+            .relacions_compartidas(&LocalFilters::default())
+            .expect("rel");
         assert_eq!(rel.len(), 1, "un grupo coa UTE");
         let g = &rel[0];
         assert_eq!(g.empresas.len(), 2, "os dous membros");
@@ -2045,7 +2234,12 @@ mod tests {
                 .any(|a| a.contains("UTE")),
             "o nome da UTE non debe estar entre os adxudicatarios a vincular"
         );
-        assert!(db.casos_sen_match().unwrap().iter().all(|c| !c.adx_nome.contains("UTE")));
+        assert!(
+            db.casos_sen_match()
+                .unwrap()
+                .iter()
+                .all(|c| !c.adx_nome.contains("UTE"))
+        );
 
         let _ = std::fs::remove_file(&path);
     }
@@ -2068,13 +2262,25 @@ mod tests {
         )
         .expect("summaries");
         db.upsert_detail(
-            &ContractDetail { contract_id: "1".into(), ..Default::default() },
-            &[Resolucion { adxudicatario: "Empresa A, S.L.".into(), ..Default::default() }],
+            &ContractDetail {
+                contract_id: "1".into(),
+                ..Default::default()
+            },
+            &[Resolucion {
+                adxudicatario: "Empresa A, S.L.".into(),
+                ..Default::default()
+            }],
         )
         .expect("detail 1");
         db.upsert_detail(
-            &ContractDetail { contract_id: "2".into(), ..Default::default() },
-            &[Resolucion { adxudicatario: "EMPRESA B SL".into(), ..Default::default() }],
+            &ContractDetail {
+                contract_id: "2".into(),
+                ..Default::default()
+            },
+            &[Resolucion {
+                adxudicatario: "EMPRESA B SL".into(),
+                ..Default::default()
+            }],
         )
         .expect("detail 2");
 
@@ -2094,7 +2300,8 @@ mod tests {
                 "agora",
             )
             .expect("entidade");
-            db.upsert_match(adx, Some(url), "exacta", "auto", "agora").expect("match");
+            db.upsert_match(adx, Some(url), "exacta", "auto", "agora")
+                .expect("match");
             // Dúas persoas distintas administran AMBAS empresas.
             db.upsert_cargos(
                 url,
@@ -2119,7 +2326,9 @@ mod tests {
             .expect("cargos");
         }
 
-        let rel = db.relacions_compartidas(&LocalFilters::default()).expect("relacions");
+        let rel = db
+            .relacions_compartidas(&LocalFilters::default())
+            .expect("relacions");
         assert_eq!(rel.len(), 1, "ambos administradores forman un único grupo");
         assert_eq!(rel[0].persoas.len(), 2, "as dúas persoas no mesmo grupo");
         assert_eq!(rel[0].empresas.len(), 2, "as dúas razóns sociais no grupo");
@@ -2148,13 +2357,25 @@ mod tests {
         )
         .expect("summaries");
         db.upsert_detail(
-            &ContractDetail { contract_id: "1".into(), ..Default::default() },
-            &[Resolucion { adxudicatario: "Empresa A, S.L.".into(), ..Default::default() }],
+            &ContractDetail {
+                contract_id: "1".into(),
+                ..Default::default()
+            },
+            &[Resolucion {
+                adxudicatario: "Empresa A, S.L.".into(),
+                ..Default::default()
+            }],
         )
         .expect("detail 1");
         db.upsert_detail(
-            &ContractDetail { contract_id: "2".into(), ..Default::default() },
-            &[Resolucion { adxudicatario: "EMPRESA B SL".into(), ..Default::default() }],
+            &ContractDetail {
+                contract_id: "2".into(),
+                ..Default::default()
+            },
+            &[Resolucion {
+                adxudicatario: "EMPRESA B SL".into(),
+                ..Default::default()
+            }],
         )
         .expect("detail 2");
 
@@ -2174,7 +2395,8 @@ mod tests {
                 "agora",
             )
             .expect("entidade");
-            db.upsert_match(adx, Some(url), "exacta", "auto", "agora").expect("match");
+            db.upsert_match(adx, Some(url), "exacta", "auto", "agora")
+                .expect("match");
             db.upsert_cargos(
                 url,
                 &[CargoRow {
@@ -2190,12 +2412,19 @@ mod tests {
         }
 
         // Sen filtros: detéctase a relación (a persoa controla as dúas empresas).
-        let rel = db.relacions_compartidas(&LocalFilters::default()).expect("relacions");
+        let rel = db
+            .relacions_compartidas(&LocalFilters::default())
+            .expect("relacions");
         assert_eq!(rel.len(), 1, "sen filtros hai unha relación");
 
         // Filtrando por 2024 só conta a empresa A → xa non hai relación.
-        let filtros = LocalFilters { year: "2024".into(), ..Default::default() };
-        let rel = db.relacions_compartidas(&filtros).expect("relacions filtradas");
+        let filtros = LocalFilters {
+            year: "2024".into(),
+            ..Default::default()
+        };
+        let rel = db
+            .relacions_compartidas(&filtros)
+            .expect("relacions filtradas");
         assert!(rel.is_empty(), "co filtro de ano a relación desaparece");
 
         let _ = std::fs::remove_file(&path);
@@ -2210,7 +2439,13 @@ mod tests {
         let mut db = Db::open(&path).expect("db");
 
         db.upsert_summaries(
-            &[summary("10", "obra con lotes", "Concello", "Formalizado", "01/02/2025")],
+            &[summary(
+                "10",
+                "obra con lotes",
+                "Concello",
+                "Formalizado",
+                "01/02/2025",
+            )],
             "agora",
         )
         .expect("upsert summaries");

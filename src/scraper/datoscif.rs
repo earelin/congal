@@ -41,10 +41,7 @@ pub fn search_entities(client: &Client, termo: &str) -> Result<Vec<Suggestion>> 
         return Ok(Vec::new());
     }
     let url = format!("{DATOSCIF_BASE}/sugerencias.ajax");
-    let body = format!(
-        "nombre={}&tipo=autocompletar",
-        form_encode_latin1(&termo)
-    );
+    let body = format!("nombre={}&tipo=autocompletar", form_encode_latin1(&termo));
     let resp = client
         .http()
         .post(&url)
@@ -62,11 +59,19 @@ pub fn search_entities(client: &Client, termo: &str) -> Result<Vec<Suggestion>> 
         .into_iter()
         .map(|r| {
             let renomeada = !r.url_new.trim().is_empty();
-            let ruta = if r.tipo_entidad == 2 { "directivo" } else { "empresa" };
+            let ruta = if r.tipo_entidad == 2 {
+                "directivo"
+            } else {
+                "empresa"
+            };
             if renomeada {
                 let url = r.url_new;
                 Suggestion {
-                    nombre: if r.nombre_new.trim().is_empty() { r.nombre } else { r.nombre_new },
+                    nombre: if r.nombre_new.trim().is_empty() {
+                        r.nombre
+                    } else {
+                        r.nombre_new
+                    },
                     uri: format!("/{ruta}/{url}"),
                     url,
                     tipo_entidad: r.tipo_entidad,
@@ -184,10 +189,7 @@ fn es_cargo_excluido(cargo: &str) -> bool {
 
 /// Captura o valor dun `<span itemprop="NOME">…</span>` (microdata) da páxina.
 fn itemprop_re(prop: &str) -> Regex {
-    Regex::new(&format!(
-        r#"(?is)itemprop="{prop}"[^>]*>(.*?)</span>"#
-    ))
-    .unwrap()
+    Regex::new(&format!(r#"(?is)itemprop="{prop}"[^>]*>(.*?)</span>"#)).unwrap()
 }
 
 /// Descarga e analiza a ficha HTML dunha empresa (CIF, domicilio, municipio,
@@ -307,12 +309,15 @@ mod tests {
 
         // Membro de UTE renomeado: busca polo nome (truncado/antigo) → segue
         // `url_new` ao slug actual, e a ficha trae o CIF do contrato (A85788073).
-        let sug = search_entities(&client, "AQUATEC PROYECTOS PARA EL SECTOR DEL")
-            .expect("busca membro");
+        let sug =
+            search_entities(&client, "AQUATEC PROYECTOS PARA EL SECTOR DEL").expect("busca membro");
         let m = sug.first().expect("debe haber suxestión");
         println!("membro UTE → slug actual: {}", m.url);
         let info = fetch_empresa_info(&client, &m.url).expect("ficha membro");
-        assert_eq!(info.cif, "A85788073", "o CIF do contrato debe casar coa ficha nova");
+        assert_eq!(
+            info.cif, "A85788073",
+            "o CIF do contrato debe casar coa ficha nova"
+        );
 
         // Nome con ñ e acento: debe atoparse (codificación ISO-8859-1 + ñ mantido).
         let sug = search_entities(&client, "CLUB BÁSQUET CORUÑA, S.A.D").expect("busca ñ");
@@ -325,11 +330,18 @@ mod tests {
         let cargos = fetch_cargos(&client, "inditex-sa").expect("cargos");
         println!("cargos inditex-sa: {}", cargos.len());
         // INDITEX SA ten decenas de cargos (actuais + antigos) e varias páxinas.
-        assert!(cargos.len() > 20, "esperábanse moitos cargos, hai {}", cargos.len());
+        assert!(
+            cargos.len() > 20,
+            "esperábanse moitos cargos, hai {}",
+            cargos.len()
+        );
         assert!(cargos.iter().all(|c| !c.persona_url.is_empty()));
 
         let info = fetch_empresa_info(&client, "inditex-sa").expect("ficha");
-        println!("CIF={} municipio={} provincia={}", info.cif, info.municipio, info.provincia);
+        println!(
+            "CIF={} municipio={} provincia={}",
+            info.cif, info.municipio, info.provincia
+        );
         assert_eq!(info.cif, "A28601094");
     }
 }

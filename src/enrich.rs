@@ -79,7 +79,10 @@ fn refresh_empresa(
             ent.provincia = info.provincia;
         }
         Err(e) => {
-            let _ = tx.send(Event::Log(format!("Erro descargando a ficha de {}: {e}", ent.url)));
+            let _ = tx.send(Event::Log(format!(
+                "Erro descargando a ficha de {}: {e}",
+                ent.url
+            )));
         }
     }
     db.upsert_datoscif_entidade(ent, false, now)?;
@@ -89,7 +92,10 @@ fn refresh_empresa(
         Ok(cargos) => {
             if let Err(e) = db.upsert_cargos(&ent.url, &cargos, now) {
                 result.erros += 1;
-                let _ = tx.send(Event::Log(format!("Erro gardando cargos de {}: {e}", ent.url)));
+                let _ = tx.send(Event::Log(format!(
+                    "Erro gardando cargos de {}: {e}",
+                    ent.url
+                )));
             } else {
                 result.cargos += cargos.len();
                 result.empresas_con_cargos += 1;
@@ -99,7 +105,10 @@ fn refresh_empresa(
         }
         Err(e) => {
             result.erros += 1;
-            let _ = tx.send(Event::Log(format!("Erro descargando cargos de {}: {e}", ent.url)));
+            let _ = tx.send(Event::Log(format!(
+                "Erro descargando cargos de {}: {e}",
+                ent.url
+            )));
         }
     }
     Ok(())
@@ -135,7 +144,13 @@ pub fn vincular_manual(
                 db.upsert_datoscif_entidade(&ent, false, &now)?;
             }
             // confianza="manual": vínculo confirmado pola persoa usuaria.
-            db.upsert_match(adx_nome, Some(&ent.url), "manual", EstadoMatch::Manual.as_str(), &now)?;
+            db.upsert_match(
+                adx_nome,
+                Some(&ent.url),
+                "manual",
+                EstadoMatch::Manual.as_str(),
+                &now,
+            )?;
         }
         None => {
             db.upsert_match(
@@ -290,7 +305,14 @@ fn match_member(
 ) -> Option<Suggestion> {
     let mut suggestions: Vec<Suggestion> = Vec::new();
     let mut seen = HashSet::new();
-    collect_search(client, tx, cancel, search_variants(nome), &mut suggestions, &mut seen);
+    collect_search(
+        client,
+        tx,
+        cancel,
+        search_variants(nome),
+        &mut suggestions,
+        &mut seen,
+    );
     let termo = fallback_search_term(nome);
     if !termo.is_empty() {
         collect_search(client, tx, cancel, [termo], &mut suggestions, &mut seen);
@@ -425,16 +447,34 @@ fn enrich_novos(
                 } else {
                     db.upsert_datoscif_entidade(&ent, false, &now)?;
                 }
-                db.upsert_match(adx, Some(&ent.url), conf.as_str(), EstadoMatch::Auto.as_str(), &now)?;
+                db.upsert_match(
+                    adx,
+                    Some(&ent.url),
+                    conf.as_str(),
+                    EstadoMatch::Auto.as_str(),
+                    &now,
+                )?;
                 result.vinculados += 1;
             }
             Decision::Revisar(conf, candidatos) => {
                 db.upsert_candidatos(adx, &candidatos)?;
-                db.upsert_match(adx, None, conf.as_str(), EstadoMatch::Revisar.as_str(), &now)?;
+                db.upsert_match(
+                    adx,
+                    None,
+                    conf.as_str(),
+                    EstadoMatch::Revisar.as_str(),
+                    &now,
+                )?;
                 result.a_revisar += 1;
             }
             Decision::SenMatch => {
-                db.upsert_match(adx, None, Confianza::SenMatch.as_str(), EstadoMatch::Pendente.as_str(), &now)?;
+                db.upsert_match(
+                    adx,
+                    None,
+                    Confianza::SenMatch.as_str(),
+                    EstadoMatch::Pendente.as_str(),
+                    &now,
+                )?;
                 result.sen_match += 1;
             }
         }
@@ -466,7 +506,9 @@ fn enrich_novos(
         });
         for (i, (cif, nome)) in membros.iter().enumerate() {
             if cancel.load(Ordering::Relaxed) {
-                let _ = tx.send(Event::Log("Vinculación de membros de UTE cancelada.".into()));
+                let _ = tx.send(Event::Log(
+                    "Vinculación de membros de UTE cancelada.".into(),
+                ));
                 break;
             }
             if let Some(sug) = match_member(client, tx, cancel, nome, cif) {
@@ -484,7 +526,12 @@ fn enrich_novos(
             let _ = tx.send(Event::SyncProgress {
                 done: i + 1,
                 total: total_m,
-                msg: format!("Membros de UTE {}/{} · {} vinculados", i + 1, total_m, result.ute_membros),
+                msg: format!(
+                    "Membros de UTE {}/{} · {} vinculados",
+                    i + 1,
+                    total_m,
+                    result.ute_membros
+                ),
             });
         }
     }

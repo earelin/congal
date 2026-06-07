@@ -130,8 +130,10 @@ mod live_tests {
         assert!(res.iter().any(|r| r.adxudicatario.contains("SOLTEC")));
 
         // 2) Busca acoutada (un ano) e persistencia en BD temporal.
-        let mut filters = Filters::default();
-        filters.year = "2025".into();
+        let filters = Filters {
+            year: "2025".into(),
+            ..Default::default()
+        };
         let rows = scraper::search(&client, &filters).expect("busca");
         println!("busca 2025: {} rexistros", rows.len());
         assert!(rows.len() > 100);

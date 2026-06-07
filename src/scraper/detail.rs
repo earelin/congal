@@ -28,9 +28,7 @@ pub fn fetch_detail(
 
 fn dt_dd_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(r"(?is)<dt[^>]*>(.*?)</dt>\s*<dd[^>]*>(.*?)</dd>").unwrap()
-    })
+    RE.get_or_init(|| Regex::new(r"(?is)<dt[^>]*>(.*?)</dt>\s*<dd[^>]*>(.*?)</dd>").unwrap())
 }
 
 fn tr_re() -> &'static Regex {
@@ -47,8 +45,10 @@ fn cell_re() -> &'static Regex {
 fn nif_token_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r"(?i)\b([ABCDEFGHJNPQRSUVW][0-9]{7}[0-9A-J]|[XYZ][0-9]{7}[A-Z]|[0-9]{8}[A-Z])\b")
-            .unwrap()
+        Regex::new(
+            r"(?i)\b([ABCDEFGHJNPQRSUVW][0-9]{7}[0-9A-J]|[XYZ][0-9]{7}[A-Z]|[0-9]{8}[A-Z])\b",
+        )
+        .unwrap()
     })
 }
 
@@ -94,8 +94,13 @@ pub(crate) fn parse_utes(html: &str, resolucions: &[Resolucion]) -> Vec<Ute> {
         let nome_raw = cells[2];
 
         // O <ul> aniñado é o segundo <ul> da cela; sen el non é unha UTE.
-        let Some(first_ul) = nome_raw.find("<ul") else { continue };
-        let Some(inner_ul) = nome_raw[first_ul + 3..].find("<ul").map(|p| first_ul + 3 + p) else {
+        let Some(first_ul) = nome_raw.find("<ul") else {
+            continue;
+        };
+        let Some(inner_ul) = nome_raw[first_ul + 3..]
+            .find("<ul")
+            .map(|p| first_ul + 3 + p)
+        else {
             continue;
         };
         let Some(inner_open_end) = nome_raw[inner_ul..].find('>').map(|p| inner_ul + p + 1) else {
@@ -163,17 +168,18 @@ fn extract_nif_map(html: &str) -> HashMap<String, String> {
         let Some(nif) = cells.iter().find(|c| nif_token_re().is_match(c)) else {
             continue;
         };
-        let Some(m) = nif_token_re().find(nif) else { continue };
+        let Some(m) = nif_token_re().find(nif) else {
+            continue;
+        };
         let nif_val = m.as_str().to_string();
         // O nome é a cela con máis letras que non sexa o propio NIF.
         if let Some(nome) = cells
             .iter()
             .filter(|c| !nif_token_re().is_match(c))
             .max_by_key(|c| c.chars().filter(|ch| ch.is_alphabetic()).count())
+            && nome.chars().filter(|ch| ch.is_alphabetic()).count() >= 4
         {
-            if nome.chars().filter(|ch| ch.is_alphabetic()).count() >= 4 {
-                add(nome, &nif_val);
-            }
+            add(nome, &nif_val);
         }
     }
 
@@ -303,7 +309,10 @@ fn parse_resolucions(html: &str) -> Vec<Resolucion> {
         // UTE) repartíronse o contrato. Expándese nunha fila por empresa real (que
         // veñen en inputs ocultos). NON implica relación entre elas. O importe déixase
         // en branco: o portal non o desagrega por empresa.
-        let multiples = raw_cells.get(3).map(|c| parse_multiples_adx(c)).unwrap_or_default();
+        let multiples = raw_cells
+            .get(3)
+            .map(|c| parse_multiples_adx(c))
+            .unwrap_or_default();
         if multiples.is_empty() {
             let nif = nif_map
                 .get(&company_key(&base.adxudicatario))
@@ -356,10 +365,10 @@ fn parse_multiples_adx(cell: &str) -> Vec<(String, String)> {
         let vs = &vals[&suffix];
         let cif = vs.iter().find(|v| nif_token_re().is_match(v)).cloned();
         let nome = vs.iter().find(|v| !nif_token_re().is_match(v)).cloned();
-        if let (Some(nome), Some(cif)) = (nome, cif) {
-            if !nome.trim().is_empty() {
-                out.push((nome.trim().to_string(), normalize_nif(&cif)));
-            }
+        if let (Some(nome), Some(cif)) = (nome, cif)
+            && !nome.trim().is_empty()
+        {
+            out.push((nome.trim().to_string(), normalize_nif(&cif)));
         }
     }
     out
@@ -384,7 +393,11 @@ mod tests {
             .iter()
             .find(|r| r.adxudicatario.contains("SOLTEC"))
             .expect("debe atoparse o adxudicatario SOLTEC");
-        assert!(soltec.importe_txt.contains("3.502"), "importe={}", soltec.importe_txt);
+        assert!(
+            soltec.importe_txt.contains("3.502"),
+            "importe={}",
+            soltec.importe_txt
+        );
         let n = soltec.importe_num.expect("importe numérico");
         assert!((3502.0..3503.0).contains(&n), "importe_num={n}");
         assert!(soltec.estado_resolucion.to_lowercase().contains("adxudic"));
@@ -422,10 +435,19 @@ mod tests {
             .find(|r| r.adxudicatario.contains("INGENIO MEDIA"))
             .expect("INGENIO MEDIA");
         assert_eq!(ingenio.nif, "B70212634");
-        assert!(res.iter().any(|r| r.adxudicatario.contains("IMAXE INTERMEDIA") && r.nif == "A15764723"));
-        assert!(res.iter().any(|r| r.adxudicatario.contains("AVANTE") && r.nif == "B70509971"));
+        assert!(
+            res.iter()
+                .any(|r| r.adxudicatario.contains("IMAXE INTERMEDIA") && r.nif == "A15764723")
+        );
+        assert!(
+            res.iter()
+                .any(|r| r.adxudicatario.contains("AVANTE") && r.nif == "B70509971")
+        );
         // O importe déixase en branco (o portal non o desagrega por empresa).
-        assert!(res.iter().all(|r| r.importe_num.is_none() && r.importe_txt.is_empty()));
+        assert!(
+            res.iter()
+                .all(|r| r.importe_num.is_none() && r.importe_txt.is_empty())
+        );
     }
 
     #[test]

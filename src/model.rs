@@ -43,13 +43,13 @@ impl EstadoGroup {
 pub struct Filters {
     pub estados: Vec<EstadoGroup>,
     pub year: String,
-    pub organo: String,           // código OR
-    pub asunto: String,           // ASUNTO_Lic (busca textual)
-    pub tipo_contrato: String,    // TC
+    pub organo: String,            // código OR
+    pub asunto: String,            // ASUNTO_Lic (busca textual)
+    pub tipo_contrato: String,     // TC
     pub tipo_procedemento: String, // TP
-    pub tipo_tramitacion: String, // TT
-    pub sistema: String,          // SC
-    pub materia: String,          // CPV
+    pub tipo_tramitacion: String,  // TT
+    pub sistema: String,           // SC
+    pub materia: String,           // CPV
 }
 
 impl Default for Filters {
@@ -223,7 +223,7 @@ pub fn parse_importe(s: &str) -> Option<f64> {
 /// que devolve o sitio (`DD-MM-YYYY`, `DD/MM/YYYY`) e tamén o propio ISO; ignora
 /// unha posible hora ao final. Devolve `None` se non se pode interpretar.
 pub fn parse_data(s: &str) -> Option<String> {
-    let token = s.trim().split_whitespace().next().unwrap_or("");
+    let token = s.split_whitespace().next().unwrap_or("");
     if token.is_empty() {
         return None;
     }
@@ -257,7 +257,7 @@ pub fn format_importe(v: f64) -> String {
     let mut enteiro = String::new();
     let len = digits.len();
     for (i, ch) in digits.chars().enumerate() {
-        if i > 0 && (len - i) % 3 == 0 {
+        if i > 0 && (len - i).is_multiple_of(3) {
             enteiro.push('.');
         }
         enteiro.push(ch);
@@ -498,9 +498,28 @@ pub struct CasoRevision {
 /// Sufixos de razón social (xa normalizados, sen puntos) que se eliminan ao
 /// comparar nomes de empresa, xa que poden non coincidir entre as dúas fontes.
 const LEGAL_SUFFIXES: &[&str] = &[
-    "slu", "slne", "sll", "slp", "sl", "srl", "srlu", "sau", "sal", "sad", "sa",
-    "scoop", "coop", "scp", "sc", "aie", "ute", "cb", "sociedad", "limitada",
-    "anonima", "deportiva",
+    "slu",
+    "slne",
+    "sll",
+    "slp",
+    "sl",
+    "srl",
+    "srlu",
+    "sau",
+    "sal",
+    "sad",
+    "sa",
+    "scoop",
+    "coop",
+    "scp",
+    "sc",
+    "aie",
+    "ute",
+    "cb",
+    "sociedad",
+    "limitada",
+    "anonima",
+    "deportiva",
 ];
 
 /// Clave de comparación dun nome: minúsculas, sen acentos, **sen puntos/comas**
@@ -585,7 +604,8 @@ pub fn nif_kind(nif: &str) -> Option<NifKind> {
         return Some(NifKind::Persoa);
     }
     // NIE: [XYZ] + 7 díxitos + letra.
-    if b"XYZ".contains(&b[0]) && b[1..8].iter().all(|&c| is_digit(c)) && b[8].is_ascii_alphabetic() {
+    if b"XYZ".contains(&b[0]) && b[1..8].iter().all(|&c| is_digit(c)) && b[8].is_ascii_alphabetic()
+    {
         return Some(NifKind::Persoa);
     }
     None
@@ -704,10 +724,10 @@ pub fn review_candidates(adx_nome: &str, suggestions: &[Suggestion]) -> Vec<Sugg
     let mut vistos = std::collections::HashSet::new();
     // Primeiro os empatados (na orde estable dos slugs), logo o resto plausible.
     for url in &tied {
-        if let Some(s) = suggestions.iter().find(|s| &s.url == url) {
-            if vistos.insert(s.url.clone()) {
-                out.push(s.clone());
-            }
+        if let Some(s) = suggestions.iter().find(|s| &s.url == url)
+            && vistos.insert(s.url.clone())
+        {
+            out.push(s.clone());
         }
     }
     for s in suggestions {
@@ -802,10 +822,10 @@ impl SortColumn {
 /// Filtros aplicados localmente sobre a base de datos (sen rede).
 #[derive(Debug, Clone, Default)]
 pub struct LocalFilters {
-    pub texto: String,        // sobre asunto/referencia
-    pub organismo: String,    // subcadea sobre nome do organismo
-    pub estado: String,       // subcadea sobre estado
-    pub year: String,         // ano de publicación
+    pub texto: String,         // sobre asunto/referencia
+    pub organismo: String,     // subcadea sobre nome do organismo
+    pub estado: String,        // subcadea sobre estado
+    pub year: String,          // ano de publicación
     pub adxudicatario: String, // subcadea sobre adxudicatario
     /// Orde do listado (columna + ascendente). Por defecto: data descendente.
     pub sort_col: SortColumn,
@@ -842,7 +862,10 @@ mod tests {
         assert_eq!(parse_data("1/2/2025").as_deref(), Some("2025-02-01"));
         assert_eq!(parse_data("2025-02-01").as_deref(), Some("2025-02-01"));
         // Ignórase a hora final.
-        assert_eq!(parse_data("01-02-2025 13:45").as_deref(), Some("2025-02-01"));
+        assert_eq!(
+            parse_data("01-02-2025 13:45").as_deref(),
+            Some("2025-02-01")
+        );
         assert_eq!(parse_data(""), None);
         assert_eq!(parse_data("sen data"), None);
     }
@@ -853,7 +876,10 @@ mod tests {
         // Entrada non ISO: devólvese tal cal.
         assert_eq!(format_data_gl("sen data"), "sen data");
         // Ida e volta.
-        assert_eq!(parse_data(&format_data_gl("2024-12-31")).as_deref(), Some("2024-12-31"));
+        assert_eq!(
+            parse_data(&format_data_gl("2024-12-31")).as_deref(),
+            Some("2024-12-31")
+        );
     }
 
     #[test]
@@ -897,7 +923,10 @@ mod tests {
     #[test]
     fn clave_empresa_quita_puntos_e_acentos() {
         assert_eq!(company_key("Construccións S.L."), "construccions sl");
-        assert_eq!(company_key("Obras, Pinturas y Más S.A."), "obras pinturas y mas sa");
+        assert_eq!(
+            company_key("Obras, Pinturas y Más S.A."),
+            "obras pinturas y mas sa"
+        );
         assert_eq!(company_core("INDITEX MODA S.L."), "inditex moda");
         // O sufixo non importa: mesmo núcleo con SL ou SA.
         assert_eq!(company_core("Foo SL"), company_core("FOO, S.A."));
@@ -943,7 +972,10 @@ mod tests {
 
     #[test]
     fn match_sen_candidatos() {
-        assert_eq!(match_suggestions("Empresa Inexistente SL", &[]), MatchResult::Ningun);
+        assert_eq!(
+            match_suggestions("Empresa Inexistente SL", &[]),
+            MatchResult::Ningun
+        );
     }
 
     #[test]
@@ -974,7 +1006,10 @@ mod tests {
     #[test]
     fn termo_de_reserva_quita_sufixo_e_palabras_curtas() {
         // Sufixo de razón social e palabras de 1-2 letras fóra.
-        assert_eq!(fallback_search_term("Talleres O Rosal, S.L."), "talleres rosal");
+        assert_eq!(
+            fallback_search_term("Talleres O Rosal, S.L."),
+            "talleres rosal"
+        );
         assert_eq!(fallback_search_term("INDITEX MODA SL"), "inditex moda");
     }
 

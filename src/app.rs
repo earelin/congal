@@ -2,11 +2,12 @@
 //! principal, e importación de datos en diálogos modais.
 
 use crate::db::{Db, DbStats, LocalOptions};
-use crate::model::{
-    CargoRow, CasoRevision, ContractDetail, DatosCifEntidade, FilterOptions, Filters, LocalFilters,
-    GrupoRelacion, LocalRow, Resolucion, SortColumn, Suggestion, format_data_gl, format_importe,
-};
 use crate::enrich::EnrichMode;
+use crate::model::{
+    CargoRow, CasoRevision, ContractDetail, DatosCifEntidade, FilterOptions, Filters,
+    GrupoRelacion, LocalFilters, LocalRow, Resolucion, SortColumn, Suggestion, format_data_gl,
+    format_importe,
+};
 use crate::scraper::DATOSCIF_BASE;
 use crate::theme;
 use crate::worker::{Command, Event, Worker};
@@ -213,7 +214,14 @@ impl App {
                     } else {
                         format!(
                             "Vinculación rematada · {} procesados · {} vinculados · {} membros UTE · {} a revisar · {} sen match · {} empresas con cargos · {} cargos · {} erros",
-                            r.procesados, r.vinculados, r.ute_membros, r.a_revisar, r.sen_match, r.empresas_con_cargos, r.cargos, r.erros
+                            r.procesados,
+                            r.vinculados,
+                            r.ute_membros,
+                            r.a_revisar,
+                            r.sen_match,
+                            r.empresas_con_cargos,
+                            r.cargos,
+                            r.erros
                         )
                     };
                     // Os vínculos cambiaron: invalidar a vista de relacións, a cola
@@ -225,7 +233,10 @@ impl App {
                         self.select_contract(row);
                     }
                 }
-                Event::RevisionResolved { adx_nome, vinculado } => {
+                Event::RevisionResolved {
+                    adx_nome,
+                    vinculado,
+                } => {
                     self.busy = false;
                     self.progress = None;
                     self.status = if vinculado {
@@ -247,7 +258,10 @@ impl App {
                         self.select_contract(row);
                     }
                 }
-                Event::DatoscifResults { adx_nome, suggestions } => {
+                Event::DatoscifResults {
+                    adx_nome,
+                    suggestions,
+                } => {
                     if self.rev_searching.as_deref() == Some(adx_nome.as_str()) {
                         self.rev_searching = None;
                     }
@@ -351,7 +365,10 @@ impl App {
     /// de datoscif (por CIF) e os seus cargos, se está vinculada.
     fn build_utes_info(&self, contract_id: &str) -> Vec<UteDetalle> {
         let mut out: Vec<UteDetalle> = Vec::new();
-        for (ute_nome, nome, cif) in self.db.ute_membros_de_contrato(contract_id).unwrap_or_default()
+        for (ute_nome, nome, cif) in self
+            .db
+            .ute_membros_de_contrato(contract_id)
+            .unwrap_or_default()
         {
             let entidade = self.db.entidade_por_cif(&cif).ok().flatten();
             let cargos = entidade
@@ -359,10 +376,18 @@ impl App {
                 .filter(|e| e.is_empresa())
                 .map(|e| self.db.cargos_de_empresa(&e.url).unwrap_or_default())
                 .unwrap_or_default();
-            let membro = UteMembroVista { nome, cif, entidade, cargos };
+            let membro = UteMembroVista {
+                nome,
+                cif,
+                entidade,
+                cargos,
+            };
             match out.iter_mut().find(|u| u.ute_nome == ute_nome) {
                 Some(u) => u.membros.push(membro),
-                None => out.push(UteDetalle { ute_nome, membros: vec![membro] }),
+                None => out.push(UteDetalle {
+                    ute_nome,
+                    membros: vec![membro],
+                }),
             }
         }
         out
@@ -405,7 +430,10 @@ impl App {
     }
 
     fn refresh_relacions(&mut self) {
-        self.relacions = self.db.relacions_compartidas(&self.local).unwrap_or_default();
+        self.relacions = self
+            .db
+            .relacions_compartidas(&self.local)
+            .unwrap_or_default();
         self.relacions_loaded = true;
     }
 
@@ -422,7 +450,8 @@ impl App {
             return;
         }
         self.rev_searching = Some(adx_nome.clone());
-        self.worker.send(Command::SearchDatoscif { adx_nome, termo });
+        self.worker
+            .send(Command::SearchDatoscif { adx_nome, termo });
     }
 
     /// Envía ao worker a resolución dun caso (vincular a `escolla` ou descartar)
@@ -438,7 +467,8 @@ impl App {
         } else {
             format!("Descartando «{adx_nome}»…")
         };
-        self.worker.send(Command::ResolveMatch { adx_nome, escolla });
+        self.worker
+            .send(Command::ResolveMatch { adx_nome, escolla });
         self.show_progress_dialog = true;
     }
 }
@@ -500,7 +530,11 @@ impl App {
                     }
 
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        let icon = if self.dark { "☀ Claro" } else { "🌙 Escuro" };
+                        let icon = if self.dark {
+                            "☀ Claro"
+                        } else {
+                            "🌙 Escuro"
+                        };
                         if ui.button(icon).clicked() {
                             self.dark = !self.dark;
                             theme::apply(ui.ctx(), self.dark);
@@ -551,7 +585,11 @@ impl App {
 
             if !self.options_loaded {
                 ui.add_space(6.0);
-                ui.label(RichText::new("Cargando opcións de filtro…").small().italics());
+                ui.label(
+                    RichText::new("Cargando opcións de filtro…")
+                        .small()
+                        .italics(),
+                );
             }
 
             ui.add_space(12.0);
@@ -639,10 +677,8 @@ impl App {
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if ui
                             .add(
-                                egui::Button::new(
-                                    RichText::new("Pechar").color(Color32::WHITE),
-                                )
-                                .fill(theme::accent(self.dark)),
+                                egui::Button::new(RichText::new("Pechar").color(Color32::WHITE))
+                                    .fill(theme::accent(self.dark)),
                             )
                             .clicked()
                         {
@@ -765,10 +801,7 @@ impl App {
                 ui.add_space(10.0);
                 ui.separator();
                 ui.label(RichText::new("Empresas").strong());
-                let vincular = ui.add_enabled(
-                    !self.busy,
-                    egui::Button::new("Importar relacións"),
-                );
+                let vincular = ui.add_enabled(!self.busy, egui::Button::new("Importar relacións"));
                 if vincular.clicked() {
                     self.start_enrich(EnrichMode::Novos);
                 }
@@ -864,11 +897,26 @@ impl App {
             // se o é, queda fixada co ancho do primeiro fotograma.
             .column(Column::initial(70.0).at_least(56.0))
             .column(Column::initial(90.0).at_least(70.0))
-            .column(Column::remainder().at_least(200.0).clip(true).resizable(false))
+            .column(
+                Column::remainder()
+                    .at_least(200.0)
+                    .clip(true)
+                    .resizable(false),
+            )
             .column(Column::initial(110.0).at_least(90.0))
             .column(Column::initial(120.0).at_least(80.0).clip(true))
-            .column(Column::remainder().at_least(150.0).clip(true).resizable(false))
-            .column(Column::remainder().at_least(150.0).clip(true).resizable(false))
+            .column(
+                Column::remainder()
+                    .at_least(150.0)
+                    .clip(true)
+                    .resizable(false),
+            )
+            .column(
+                Column::remainder()
+                    .at_least(150.0)
+                    .clip(true)
+                    .resizable(false),
+            )
             .column(Column::initial(120.0).at_least(90.0))
             .header(24.0, |mut h| {
                 // (título, columna de orde). Premer ordena; volver premer inverte. A
@@ -913,7 +961,10 @@ impl App {
                                 |ui| ui.add(lab),
                             )
                             .inner;
-                        if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                        if resp
+                            .on_hover_cursor(egui::CursorIcon::PointingHand)
+                            .clicked()
+                        {
                             clicked_header = Some(col);
                         }
                     });
@@ -935,9 +986,8 @@ impl App {
                                 ui.label(&r.id);
                                 if r.participante_unico {
                                     ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                                        ui.label(RichText::new("⚠").color(aviso)).on_hover_text(
-                                            "Un só participante presentado",
-                                        );
+                                        ui.label(RichText::new("⚠").color(aviso))
+                                            .on_hover_text("Un só participante presentado");
                                     });
                                 }
                             });
@@ -1176,36 +1226,36 @@ impl App {
                     ui.set_width(ui.available_width());
                     // Persoas que conectan o grupo (pode non habelas: trama só por UTE).
                     if !g.persoas.is_empty() {
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label(RichText::new("Persoas:").small().color(Color32::GRAY));
-                        for p in &g.persoas {
-                            ui.hyperlink_to(
-                                RichText::new(&p.persona_nome).strong(),
-                                format!("{DATOSCIF_BASE}/directivo/{}", p.persona_url),
-                            );
-                            // Resumo dos vínculos da persoa: cantos actuais e cantos
-                            // xa cesados. Se hai algún pasado, resáltase.
-                            let (txt, color) = if p.empresas_pasadas == 0 {
-                                (format!("({} empresas)", p.num_empresas), Color32::GRAY)
-                            } else if p.empresas_activas == 0 {
-                                (
-                                    format!("({} empresas, todas pasadas)", p.num_empresas),
-                                    historico,
-                                )
-                            } else {
-                                (
-                                    format!(
-                                        "({} actuais · {} pasada{})",
-                                        p.empresas_activas,
-                                        p.empresas_pasadas,
-                                        if p.empresas_pasadas == 1 { "" } else { "s" },
-                                    ),
-                                    historico,
-                                )
-                            };
-                            ui.label(RichText::new(txt).small().color(color));
-                        }
-                    });
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(RichText::new("Persoas:").small().color(Color32::GRAY));
+                            for p in &g.persoas {
+                                ui.hyperlink_to(
+                                    RichText::new(&p.persona_nome).strong(),
+                                    format!("{DATOSCIF_BASE}/directivo/{}", p.persona_url),
+                                );
+                                // Resumo dos vínculos da persoa: cantos actuais e cantos
+                                // xa cesados. Se hai algún pasado, resáltase.
+                                let (txt, color) = if p.empresas_pasadas == 0 {
+                                    (format!("({} empresas)", p.num_empresas), Color32::GRAY)
+                                } else if p.empresas_activas == 0 {
+                                    (
+                                        format!("({} empresas, todas pasadas)", p.num_empresas),
+                                        historico,
+                                    )
+                                } else {
+                                    (
+                                        format!(
+                                            "({} actuais · {} pasada{})",
+                                            p.empresas_activas,
+                                            p.empresas_pasadas,
+                                            if p.empresas_pasadas == 1 { "" } else { "s" },
+                                        ),
+                                        historico,
+                                    )
+                                };
+                                ui.label(RichText::new(txt).small().color(color));
+                            }
+                        });
                     }
 
                     // UTE: empresas que concorreron xuntas (vínculo distinto do
@@ -1282,7 +1332,9 @@ impl App {
                                                     .monospace()
                                                     .color(Color32::GRAY),
                                             );
-                                            ui.label(RichText::new(&c.importe_txt).small().strong());
+                                            ui.label(
+                                                RichText::new(&c.importe_txt).small().strong(),
+                                            );
                                             ui.label(
                                                 RichText::new(format!("· {}", c.empresa_nome))
                                                     .small()
@@ -1290,14 +1342,16 @@ impl App {
                                             );
                                             if !c.asunto.is_empty() {
                                                 ui.label(
-                                                    RichText::new(format!("— {}", c.asunto)).small(),
+                                                    RichText::new(format!("— {}", c.asunto))
+                                                        .small(),
                                                 );
                                             }
                                         })
                                         .response
                                         .interact(egui::Sense::click());
                                     if resp.hovered() {
-                                        resp.clone().on_hover_cursor(egui::CursorIcon::PointingHand);
+                                        resp.clone()
+                                            .on_hover_cursor(egui::CursorIcon::PointingHand);
                                     }
                                     if resp.clicked() {
                                         jump = Some(c.contract_id.clone());
@@ -1311,11 +1365,11 @@ impl App {
 
         // Saltar á ficha do contrato premido: selecciónase e cámbiase á pestana
         // Contratos, que pasará a amosar a vista de detalle no seguinte fotograma.
-        if let Some(id) = jump {
-            if let Some(row) = self.rows.iter().find(|r| r.id == id).cloned() {
-                self.select_contract(row);
-                self.tab = Tab::Contratos;
-            }
+        if let Some(id) = jump
+            && let Some(row) = self.rows.iter().find(|r| r.id == id).cloned()
+        {
+            self.select_contract(row);
+            self.tab = Tab::Contratos;
         }
     }
 
@@ -1369,8 +1423,11 @@ impl App {
             if !sen_match.is_empty() {
                 ui.add_space(8.0);
                 egui::CollapsingHeader::new(
-                    RichText::new(format!("Sen correspondencia en datoscif ({})", sen_match.len()))
-                        .strong(),
+                    RichText::new(format!(
+                        "Sen correspondencia en datoscif ({})",
+                        sen_match.len()
+                    ))
+                    .strong(),
                 )
                 .id_salt("sen_match")
                 .show(ui, |ui| {
@@ -1448,7 +1505,11 @@ impl App {
             ui.add_space(6.0);
             ui.separator();
             ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new("Buscar en datoscif:").small().color(Color32::GRAY));
+                ui.label(
+                    RichText::new("Buscar en datoscif:")
+                        .small()
+                        .color(Color32::GRAY),
+                );
                 let resp = ui.add_enabled(
                     !busy && !searching,
                     egui::TextEdit::singleline(&mut termo)
@@ -1505,7 +1566,10 @@ fn candidato_row(ui: &mut egui::Ui, c: &Suggestion, busy: bool) -> bool {
     let ruta = if es_empresa { "empresa" } else { "directivo" };
     let mut vincular = false;
     ui.horizontal_wrapped(|ui| {
-        if ui.add_enabled(!busy, egui::Button::new("Vincular")).clicked() {
+        if ui
+            .add_enabled(!busy, egui::Button::new("Vincular"))
+            .clicked()
+        {
             vincular = true;
         }
         ui.label(if es_empresa { "🏢" } else { "👤" });
@@ -1613,7 +1677,11 @@ fn render_cargos(ui: &mut egui::Ui, cargos: &[CargoRow]) {
                 ui.label(RichText::new("○").small().color(historico));
                 ui.label(RichText::new(&c.persona_nome).small().color(Color32::GRAY));
                 if !c.cargo.is_empty() {
-                    ui.label(RichText::new(format!("— {}", c.cargo)).small().color(Color32::GRAY));
+                    ui.label(
+                        RichText::new(format!("— {}", c.cargo))
+                            .small()
+                            .color(Color32::GRAY),
+                    );
                 }
                 let marca = if c.hasta.is_empty() {
                     "· cesado".to_string()
@@ -1732,7 +1800,10 @@ fn year_combo(ui: &mut egui::Ui, selected: &mut String) {
         .width(ui.available_width().min(280.0))
         .height(320.0)
         .show_ui(ui, |ui| {
-            if ui.selectable_label(selected.is_empty(), "(todos)").clicked() {
+            if ui
+                .selectable_label(selected.is_empty(), "(todos)")
+                .clicked()
+            {
                 selected.clear();
             }
             for y in (2008..=current).rev() {
@@ -1800,7 +1871,10 @@ fn combo_valor(
             ui.set_min_height(filas as f32 * row_h);
 
             let f = crate::model::normalize_search(filtro);
-            if ui.selectable_label(selected.is_empty(), "(todos)").clicked() {
+            if ui
+                .selectable_label(selected.is_empty(), "(todos)")
+                .clicked()
+            {
                 selected.clear();
                 changed = true;
                 closing = true;
@@ -1879,7 +1953,11 @@ fn combo_codigo(
             ui.set_min_height(filas as f32 * row_h);
             // Ao seleccionar, limpamos o texto de busca e pechamos o popup. A opción
             // "(todos)" só se ofrece cando se permiten filtros baleiros.
-            if permitir_todos && ui.selectable_label(selected.is_empty(), "(todos)").clicked() {
+            if permitir_todos
+                && ui
+                    .selectable_label(selected.is_empty(), "(todos)")
+                    .clicked()
+            {
                 selected.clear();
                 filtro.clear();
                 closing = true;
