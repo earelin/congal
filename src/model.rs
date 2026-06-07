@@ -278,8 +278,10 @@ pub struct LocalRow {
     pub adxudicatario: String,
     pub importe_resolucion_txt: String,
     pub enlace_resolucion: String,
-    /// `true` se na resolución consta un único participante (posible indicio de
-    /// que algo non é regular). Derívase de `MAX(participacion) == 1`.
+    /// `true` se en TODOS os lotes da resolución consta un único participante
+    /// (posible indicio de que algo non é regular). Derívase de que tanto o
+    /// mínimo coma o máximo de `participacion` sexan `1`; un lote con
+    /// participación descoñecida/baleira non se marca.
     pub participante_unico: bool,
 }
 

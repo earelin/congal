@@ -477,7 +477,7 @@ impl Db {
                       c.importe_num, COALESCE(e.nome,''),
                       COALESCE(c.data_publicacion,''), COALESCE(o.nome,''),
                       COALESCE(r.adxudicatarios,''), r.importe_total,
-                      COALESCE(d.enlace_resolucion,''), r.max_part
+                      COALESCE(d.enlace_resolucion,''), r.max_part, r.min_part
                FROM contracts c
                LEFT JOIN organismos o ON o.cod_organismo = c.cod_organismo
                LEFT JOIN estados e ON e.cod_estado = c.cod_estado
@@ -486,7 +486,8 @@ impl Db {
                    SELECT contract_id,
                           GROUP_CONCAT(DISTINCT NULLIF(TRIM(adxudicatario),'')) AS adxudicatarios,
                           SUM(importe_resolucion_num) AS importe_total,
-                          MAX(CAST(participacion AS INTEGER)) AS max_part
+                          MAX(CAST(participacion AS INTEGER)) AS max_part,
+                          MIN(CAST(participacion AS INTEGER)) AS min_part
                    FROM contract_resolucion
                    GROUP BY contract_id
                ) r ON r.contract_id = c.id
@@ -495,10 +496,11 @@ impl Db {
         let (where_sql, args) = local_where(f);
         sql.push_str(&where_sql);
         // Orde escollida na cabeceira (expresión fixa, sen entrada do usuario);
-        // os valores baleiros/NULL van ao final, e o id desempata de xeito estable.
+        // os valores baleiros/NULL van ao final, e o id (numérico) desempata de
+        // xeito estable.
         let dir = if f.sort_asc { "ASC" } else { "DESC" };
         sql.push_str(&format!(
-            " ORDER BY {} {dir} NULLS LAST, c.id DESC LIMIT 5000",
+            " ORDER BY {} {dir} NULLS LAST, CAST(c.id AS INTEGER) DESC LIMIT 5000",
             f.sort_col.order_sql()
         ));
 
@@ -510,6 +512,7 @@ impl Db {
             let data_iso: String = row.get(5)?;
             let importe_total: Option<f64> = row.get(8)?;
             let max_part: Option<i64> = row.get(10)?;
+            let min_part: Option<i64> = row.get(11)?;
             Ok(LocalRow {
                 id: row.get(0)?,
                 referencia: row.get(1)?,
@@ -521,7 +524,10 @@ impl Db {
                 adxudicatario: row.get(7)?,
                 importe_resolucion_txt: importe_total.map(format_importe).unwrap_or_default(),
                 enlace_resolucion: row.get(9)?,
-                participante_unico: max_part == Some(1),
+                // Único participante só se TODOS os lotes constan cun único
+                // participante: se algún ten participación descoñecida/baleira
+                // (CAST → 0) ou maior, non se marca.
+                participante_unico: max_part == Some(1) && min_part == Some(1),
             })
         })?;
         let mut out = Vec::new();
@@ -1469,7 +1475,7 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
-    // Os contratos cun único participante (MAX(participacion)==1) márcanse.
+    // Só se marca o contrato no que TODOS os lotes constan cun único participante.
     #[test]
     fn marca_contratos_de_participante_unico() {
         let path = std::env::temp_dir().join("congal_test_part_unico.sqlite");
@@ -1480,6 +1486,7 @@ mod tests {
                 summary("1", "a", "Concello", "Adxudicado", "01/02/2025"),
                 summary("2", "b", "Concello", "Adxudicado", "01/02/2025"),
                 summary("3", "c", "Concello", "Adxudicado", "01/02/2025"),
+                summary("4", "d", "Concello", "Adxudicado", "01/02/2025"),
             ],
             "agora",
         )
@@ -1494,6 +1501,16 @@ mod tests {
             &[Resolucion { participacion: "3".into(), adxudicatario: "Y SL".into(), ..Default::default() }],
         )
         .expect("d2");
+        // O contrato 4 ten dous lotes: un cun único participante e outro con
+        // participación descoñecida (baleira). Non debe marcarse.
+        db.upsert_detail(
+            &ContractDetail { contract_id: "4".into(), ..Default::default() },
+            &[
+                Resolucion { participacion: "1".into(), adxudicatario: "Z SL".into(), ..Default::default() },
+                Resolucion { participacion: "".into(), adxudicatario: "W SL".into(), ..Default::default() },
+            ],
+        )
+        .expect("d4");
         // O contrato 3 queda sen detalle (sen resolución).
 
         let rows = db.query_local(&LocalFilters::default()).expect("query");
@@ -1501,6 +1518,7 @@ mod tests {
         assert!(unico("1"), "1 participante → marcado");
         assert!(!unico("2"), "3 participantes → non marcado");
         assert!(!unico("3"), "sen resolución → non marcado");
+        assert!(!unico("4"), "lote con participación descoñecida → non marcado");
 
         let _ = std::fs::remove_file(&path);
     }

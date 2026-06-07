@@ -912,7 +912,7 @@ impl App {
                             ui.horizontal(|ui| {
                                 if r.participante_unico {
                                     ui.label(RichText::new("⚠").color(aviso)).on_hover_text(
-                                        "Un só participante presentado (posible indicio de irregularidade)",
+                                        "Un só participante presentado",
                                     );
                                 }
                                 ui.allocate_ui_with_layout(
