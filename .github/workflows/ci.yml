@@ -16,8 +16,8 @@ env:
   RUSTFLAGS: "-D warnings"
 
 jobs:
-  lint:
-    name: Lint (fmt + clippy)
+  ci:
+    name: Lint + Build + Test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -48,28 +48,6 @@ jobs:
 
       - name: Clippy
         run: cargo clippy --all-targets --all-features
-
-  build-test:
-    name: Build + Test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Instalar toolchain de Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Instalar dependencias do sistema
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libgtk-3-dev \
-            libxkbcommon-dev \
-            libxcb-render0-dev \
-            libxcb-shape0-dev \
-            libxcb-xfixes0-dev
-
-      - name: Cache de cargo
-        uses: Swatinem/rust-cache@v2
 
       - name: Build
         run: cargo build --release --locked
