@@ -840,43 +840,51 @@ impl App {
         let (cur_col, cur_asc) = (self.local.sort_col, self.local.sort_asc);
         let accent = theme::accent(self.dark);
         let mut clicked_header: Option<SortColumn> = None;
+        // egui_extras só debuxa a liña de redimensión nas columnas redimensionables. As
+        // columnas `remainder` (Obxecto, Organismo, Adxudicatario) non o son, así que se
+        // recolle o x do bordo dereito de cada unha na cabeceira e píntanse a man esas
+        // liñas de alto completo trala táboa, co mesmo trazo e posición que as de egui_extras.
+        let mut sep_xs: Vec<f32> = Vec::new();
+        let spacing_x = ui.spacing().item_spacing.x;
+        let sep_stroke = ui.visuals().widgets.noninteractive.bg_stroke;
+        let table_top = ui.cursor().top();
         // Texto non seleccionable nas celas: así o cursor non entra en modo
         // inserción de texto e o clic chega á fila enteira (sense ::click).
         ui.style_mut().interaction.selectable_labels = false;
-        TableBuilder::new(ui)
+        let out = TableBuilder::new(ui)
             .striped(true)
             .resizable(true)
             .sense(egui::Sense::click())
             .cell_layout(Layout::left_to_right(Align::Center))
+            // As columnas numéricas/de data son redimensionables cun ancho propio. As de
+            // texto (Obxecto, Organismo, Adxudicatario) son `remainder`: reparten o espazo
+            // sobrante e medran ao agrandar a ventá (Obxecto algo máis ancha polo `at_least`).
+            // Teñen que ser `.resizable(false)`: en egui_extras unha columna `remainder` só
+            // segue ocupando o espazo sobrante en cada fotograma se NON é redimensionable;
+            // se o é, queda fixada co ancho do primeiro fotograma.
             .column(Column::initial(70.0).at_least(56.0))
-            .column(Column::initial(90.0))
-            // Columnas de texto: reparten o espazo sobrante a partes iguais, así ao
-            // agrandar a ventá medran as tres e amosan máis información. O `at_least`
-            // fixa a proporción mínima (Obxecto algo máis ancho que as outras).
-            //
-            // Teñen que ser `.resizable(false)`: en egui_extras unha columna `remainder`
-            // só segue ocupando o espazo sobrante en cada fotograma se NON é redimensionable;
-            // se o é, queda fixada co ancho do primeiro fotograma e non medra ao agrandar a ventá.
+            .column(Column::initial(90.0).at_least(70.0))
             .column(Column::remainder().at_least(200.0).clip(true).resizable(false))
-            .column(Column::initial(110.0))
-            .column(Column::initial(130.0))
+            .column(Column::initial(110.0).at_least(90.0))
+            .column(Column::initial(120.0).at_least(80.0).clip(true))
             .column(Column::remainder().at_least(150.0).clip(true).resizable(false))
             .column(Column::remainder().at_least(150.0).clip(true).resizable(false))
-            .column(Column::initial(120.0))
+            .column(Column::initial(120.0).at_least(90.0))
             .header(24.0, |mut h| {
-                // (título, columna de orde, aliñado á dereita). Premer ordena; volver
-                // premer inverte. A columna activa marca cor de acento e frecha. Úsanse
-                // etiquetas clicables (non `selectable_label`) para que o fondo do hover
-                // non quede recortado polas columnas con `clip`.
-                for (t, col, dereita) in [
-                    ("ID", SortColumn::Id, true),
-                    ("Data", SortColumn::Data, true),
-                    ("Obxecto", SortColumn::Obxecto, false),
-                    ("Importe", SortColumn::Importe, true),
-                    ("Estado", SortColumn::Estado, false),
-                    ("Organismo", SortColumn::Organismo, false),
-                    ("Adxudicatario", SortColumn::Adxudicatario, false),
-                    ("Imp. resolución", SortColumn::ImporteResolucion, true),
+                // (título, columna de orde). Premer ordena; volver premer inverte. A
+                // columna activa marca cor de acento e frecha. Os títulos van centrados
+                // e a etiqueta enche a cela (todo o ancho é clicable). Úsanse etiquetas
+                // clicables (non `selectable_label`) para que o fondo do hover non quede
+                // recortado polas columnas con `clip`.
+                for (t, col) in [
+                    ("ID", SortColumn::Id),
+                    ("Data", SortColumn::Data),
+                    ("Obxecto", SortColumn::Obxecto),
+                    ("Importe", SortColumn::Importe),
+                    ("Estado", SortColumn::Estado),
+                    ("Organismo", SortColumn::Organismo),
+                    ("Adxudicatario", SortColumn::Adxudicatario),
+                    ("Imp. resolución", SortColumn::ImporteResolucion),
                 ] {
                     let activa = cur_col == col;
                     let etiqueta = if activa {
@@ -889,13 +897,22 @@ impl App {
                         txt = txt.color(accent);
                     }
                     h.col(|ui| {
+                        // Recóllese o bordo dereito (antes da marxe) das columnas `remainder`
+                        // para pintarlles a man a liña separadora que egui_extras non debuxa.
+                        if matches!(
+                            col,
+                            SortColumn::Obxecto | SortColumn::Organismo | SortColumn::Adxudicatario
+                        ) {
+                            sep_xs.push(ui.max_rect().right() + spacing_x);
+                        }
+                        pad_cela(ui);
                         let lab = egui::Label::new(txt).sense(egui::Sense::click());
-                        let resp = if dereita {
-                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| ui.add(lab))
-                                .inner
-                        } else {
-                            ui.add(lab)
-                        };
+                        let resp = ui
+                            .with_layout(
+                                Layout::centered_and_justified(egui::Direction::LeftToRight),
+                                |ui| ui.add(lab),
+                            )
+                            .inner;
                         if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
                             clicked_header = Some(col);
                         }
@@ -909,44 +926,52 @@ impl App {
                         row.set_selected(is_sel);
                         // Icona de aviso á esquerda; ID á dereita (números aliñados).
                         row.col(|ui| {
-                            ui.horizontal(|ui| {
+                            pad_cela(ui);
+                            // Icona de aviso á esquerda; ID á dereita. Faise nun único
+                            // `right_to_left` (centrado en vertical coma o resto de celas)
+                            // para que o texto do ID quede á mesma altura; o aviso métese
+                            // ao final (esquerda) cun `left_to_right` que ocupa o resto.
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                ui.label(&r.id);
                                 if r.participante_unico {
-                                    ui.label(RichText::new("⚠").color(aviso)).on_hover_text(
-                                        "Un só participante presentado",
-                                    );
+                                    ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                                        ui.label(RichText::new("⚠").color(aviso)).on_hover_text(
+                                            "Un só participante presentado",
+                                        );
+                                    });
                                 }
-                                ui.allocate_ui_with_layout(
-                                    egui::vec2(ui.available_width(), ui.available_height()),
-                                    Layout::right_to_left(Align::Center),
-                                    |ui| {
-                                        ui.label(&r.id);
-                                    },
-                                );
                             });
                         });
                         row.col(|ui| {
+                            pad_cela(ui);
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                 ui.label(&r.publicacion);
                             });
                         });
                         row.col(|ui| {
+                            pad_cela(ui);
                             ui.label(&r.asunto);
                         });
                         row.col(|ui| {
+                            pad_cela(ui);
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                 ui.label(&r.importe_txt);
                             });
                         });
                         row.col(|ui| {
+                            pad_cela(ui);
                             ui.label(&r.estado);
                         });
                         row.col(|ui| {
+                            pad_cela(ui);
                             ui.label(&r.organismo);
                         });
                         row.col(|ui| {
+                            pad_cela(ui);
                             ui.label(&r.adxudicatario);
                         });
                         row.col(|ui| {
+                            pad_cela(ui);
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                 ui.label(&r.importe_resolucion_txt);
                             });
@@ -959,13 +984,22 @@ impl App {
                     });
                 }
             });
+        // Liñas separadoras das columnas `remainder` non redimensionables: de alto
+        // completo (da cabeceira ata o fondo do contido, recortado ao viewport), para
+        // que se vexan continuas e aliñen coas que debuxa egui_extras nas demais.
+        let bottom = (out.inner_rect.top() + out.content_size.y).min(out.inner_rect.bottom());
+        for x in sep_xs {
+            ui.painter()
+                .vline(x, egui::Rangef::new(table_top, bottom), sep_stroke);
+        }
         if let Some(col) = clicked_header {
-            // Mesma columna: inverte; nova columna: orde ascendente.
+            // Mesma columna: inverte; nova columna: sentido por defecto segundo o tipo
+            // (numéricas/data → desc; texto → asc).
             if self.local.sort_col == col {
                 self.local.sort_asc = !self.local.sort_asc;
             } else {
                 self.local.sort_col = col;
-                self.local.sort_asc = true;
+                self.local.sort_asc = col.default_asc();
             }
             self.need_query = true;
         }
@@ -1547,6 +1581,16 @@ fn render_datoscif(ui: &mut egui::Ui, info: &[AdxDatosCif]) {
             }
         });
     }
+}
+
+/// Reserva unha marxe interior de 4px a ambos lados da cela para que o contido
+/// (sobre todo os números aliñados á dereita e o texto recortado) non toque os
+/// bordos da columna.
+fn pad_cela(ui: &mut egui::Ui) {
+    const PAD: f32 = 4.0;
+    let ancho = ui.available_width();
+    ui.add_space(PAD);
+    ui.set_max_width((ancho - 2.0 * PAD).max(0.0));
 }
 
 /// Renderiza a lista de cargos dunha empresa: activos con ●; cesados con ○,

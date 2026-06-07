@@ -781,6 +781,22 @@ impl SortColumn {
             SortColumn::ImporteResolucion => "r.importe_total",
         }
     }
+
+    /// Sentido por defecto ao premer por primeira vez nunha columna: as numéricas e
+    /// de data ordénanse descendente (o máis recente/grande primeiro); as de texto,
+    /// ascendente (alfabético A→Z).
+    pub fn default_asc(self) -> bool {
+        match self {
+            SortColumn::Id
+            | SortColumn::Data
+            | SortColumn::Importe
+            | SortColumn::ImporteResolucion => false,
+            SortColumn::Obxecto
+            | SortColumn::Estado
+            | SortColumn::Organismo
+            | SortColumn::Adxudicatario => true,
+        }
+    }
 }
 
 /// Filtros aplicados localmente sobre a base de datos (sen rede).
