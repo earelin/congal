@@ -4,7 +4,7 @@
 use crate::db::{Db, DbStats, LocalOptions};
 use crate::model::{
     CargoRow, ContractDetail, DatosCifEntidade, EstadoGroup, FilterOptions, Filters, LocalFilters,
-    LocalRow, PersoaRelacion, Resolucion,
+    GrupoRelacion, LocalRow, Resolucion,
 };
 use crate::scraper::DATOSCIF_BASE;
 use crate::theme;
@@ -50,9 +50,9 @@ pub struct App {
     /// Info de datoscif (entidade + cargos) por adxudicatario do contrato aberto.
     selected_datoscif: Vec<AdxDatosCif>,
 
-    /// Vista de relacións entre razóns sociais (mesma persoa, varias empresas).
+    /// Vista de relacións: grupos (tramas) de razóns sociais interconectadas.
     show_relacions: bool,
-    relacions: Vec<PersoaRelacion>,
+    relacions: Vec<GrupoRelacion>,
     relacions_loaded: bool,
 }
 
@@ -798,8 +798,10 @@ impl App {
         });
         ui.label(
             RichText::new(
-                "Persoas (administradores/apoderados) cun cargo en dúas ou máis empresas \
-                 distintas que aparecen como adxudicatarias nos teus contratos.",
+                "Grupos de razóns sociais conectadas entre si por persoas \
+                 (administradores/apoderados) cun cargo en dúas ou máis das empresas \
+                 adxudicatarias dos teus contratos. Cada grupo reúne todas as empresas e \
+                 persoas dunha mesma trama.",
             )
             .small()
             .color(Color32::GRAY),
@@ -825,33 +827,34 @@ impl App {
         }
 
         ScrollArea::vertical().show(ui, |ui| {
-            for p in &self.relacions {
+            for g in &self.relacions {
                 ui.add_space(6.0);
                 ui.group(|ui| {
                     ui.set_width(ui.available_width());
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new(&p.persona_nome).strong().size(15.0));
-                        ui.hyperlink_to(
-                            "↗ datoscif",
-                            format!("{DATOSCIF_BASE}/directivo/{}", p.persona_url),
-                        );
+                    // Persoas que conectan o grupo.
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(RichText::new("Persoas:").small().color(Color32::GRAY));
+                        for p in &g.persoas {
+                            ui.hyperlink_to(
+                                RichText::new(&p.persona_nome).strong(),
+                                format!("{DATOSCIF_BASE}/directivo/{}", p.persona_url),
+                            );
+                            ui.label(
+                                RichText::new(format!("({} empresas)", p.num_empresas))
+                                    .small()
+                                    .color(Color32::GRAY),
+                            );
+                        }
                     });
-                    ui.label(
-                        RichText::new(format!("controla {} razóns sociais", p.empresas.len()))
-                            .small()
-                            .color(Color32::GRAY),
-                    );
+                    // Razóns sociais do grupo.
                     ui.add_space(4.0);
-                    for e in &p.empresas {
+                    for e in &g.empresas {
                         ui.horizontal_wrapped(|ui| {
                             ui.label("•");
                             ui.hyperlink_to(
                                 RichText::new(&e.empresa_nome).strong(),
                                 format!("{DATOSCIF_BASE}/empresa/{}", e.empresa_url),
                             );
-                            if !e.cargo.is_empty() {
-                                ui.label(RichText::new(format!("({})", e.cargo)).small());
-                            }
                             let mut extra = format!("· {} contratos", e.num_contratos);
                             if !e.provincia.is_empty() {
                                 extra = format!("· {} {}", e.provincia, extra);

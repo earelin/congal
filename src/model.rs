@@ -318,23 +318,32 @@ pub struct CargoRow {
     pub activo: bool,
 }
 
-/// Unha empresa controlada por unha persoa que ademais aparece como
-/// adxudicataria nos contratos.
+/// Unha razón social que aparece como adxudicataria e forma parte dun grupo.
 #[derive(Debug, Clone)]
-pub struct EmpresaRelacionada {
+pub struct EmpresaNodo {
     pub empresa_url: String,
     pub empresa_nome: String,
     pub provincia: String,
-    pub cargo: String,
     pub num_contratos: i64,
 }
 
-/// Persoa que controla varias razóns sociais presentes nos contratos.
+/// Unha persoa (administrador/apoderado) que conecta razóns sociais dun grupo.
 #[derive(Debug, Clone)]
-pub struct PersoaRelacion {
+pub struct PersoaNodo {
     pub persona_url: String,
     pub persona_nome: String,
-    pub empresas: Vec<EmpresaRelacionada>,
+    /// Cantas razóns sociais do grupo controla esta persoa.
+    pub num_empresas: usize,
+}
+
+/// Un grupo (trama) de razóns sociais interconectadas: unha compoñente conexa
+/// do grafo persoa↔empresa, onde as persoas comparten cargo en varias das
+/// empresas adxudicatarias. Substitúe a vista de «unha persoa por tarxeta»,
+/// fusionando os casos onde varias persoas controlan as mesmas empresas.
+#[derive(Debug, Clone)]
+pub struct GrupoRelacion {
+    pub persoas: Vec<PersoaNodo>,
+    pub empresas: Vec<EmpresaNodo>,
 }
 
 /// Nivel de confianza do emparellamento adxudicatario ↔ entidade de datoscif.

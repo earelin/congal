@@ -1,8 +1,8 @@
 //! Persistencia en SQLite (rusqlite, bundled).
 
 use crate::model::{
-    CargoRow, ContractDetail, ContractSummary, DatosCifEntidade, EmpresaRelacionada, LocalFilters,
-    LocalRow, PersoaRelacion, Resolucion, company_key, format_data_gl, format_importe,
+    CargoRow, ContractDetail, ContractSummary, DatosCifEntidade, EmpresaNodo, GrupoRelacion,
+    LocalFilters, LocalRow, PersoaNodo, Resolucion, company_key, format_data_gl, format_importe,
     normalize_search, parse_data, parse_importe,
 };
 use anyhow::Result;
@@ -772,10 +772,15 @@ impl Db {
         Ok(out)
     }
 
-    /// Persoas que teñen cargo en ≥2 razóns sociais distintas que ademais
-    /// aparecen como adxudicatarias nos contratos. É o cerne da detección de
-    /// "a mesma man detrás de varias empresas".
-    pub fn relacions_compartidas(&self) -> Result<Vec<PersoaRelacion>> {
+    /// Grupos (tramas) de razóns sociais interconectadas: compoñentes conexas
+    /// do grafo persoa↔empresa, onde unha ou varias persoas teñen cargo en ≥2
+    /// razóns sociais que ademais aparecen como adxudicatarias nos contratos.
+    /// É o cerne da detección de "a mesma man detrás de varias empresas".
+    ///
+    /// Só as persoas que conectan ≥2 empresas forman arestas do grafo: así, dous
+    /// administradores que controlan as mesmas empresas caen no mesmo grupo en
+    /// vez de aparecer como dúas tarxetas case idénticas.
+    pub fn relacions_compartidas(&self) -> Result<Vec<GrupoRelacion>> {
         let mut stmt = self.conn.prepare(
             r#"
             WITH empresa_contratos AS (
@@ -787,7 +792,7 @@ impl Db {
                 GROUP BY m.datoscif_url
             ),
             persoa_empresas AS (
-                SELECT c.persona_url, c.empresa_url, MIN(c.cargo) AS cargo
+                SELECT c.persona_url, c.empresa_url
                 FROM datoscif_cargo c
                 JOIN empresa_contratos ec ON ec.empresa_url = c.empresa_url
                 GROUP BY c.persona_url, c.empresa_url
@@ -798,42 +803,116 @@ impl Db {
             )
             SELECT pe.persona_url, COALESCE(per.nome,''),
                    pe.empresa_url, COALESCE(emp.nome,''), COALESCE(emp.provincia,''),
-                   COALESCE(pe.cargo,''), ec.num_contratos
+                   ec.num_contratos
             FROM persoa_empresas pe
             JOIN persoas_multi pm ON pm.persona_url = pe.persona_url
             JOIN empresa_contratos ec ON ec.empresa_url = pe.empresa_url
             LEFT JOIN datoscif_entidade per ON per.url = pe.persona_url
             LEFT JOIN datoscif_entidade emp ON emp.url = pe.empresa_url
-            ORDER BY per.nome COLLATE NOCASE, pe.persona_url, emp.nome COLLATE NOCASE
             "#,
         )?;
-        let rows = stmt.query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                EmpresaRelacionada {
+
+        // Cada fila é unha aresta persoa↔empresa.
+        struct Aresta {
+            persona_url: String,
+            persona_nome: String,
+            empresa_url: String,
+            empresa_nome: String,
+            provincia: String,
+            num_contratos: i64,
+        }
+        let arestas: Vec<Aresta> = stmt
+            .query_map([], |row| {
+                Ok(Aresta {
+                    persona_url: row.get(0)?,
+                    persona_nome: row.get(1)?,
                     empresa_url: row.get(2)?,
                     empresa_nome: row.get(3)?,
                     provincia: row.get(4)?,
-                    cargo: row.get(5)?,
-                    num_contratos: row.get(6)?,
-                },
-            ))
-        })?;
+                    num_contratos: row.get(5)?,
+                })
+            })?
+            .collect::<rusqlite::Result<_>>()?;
 
-        // Agrupar as filas por persoa.
-        let mut out: Vec<PersoaRelacion> = Vec::new();
-        for r in rows {
-            let (purl, pnome, emp) = r?;
-            match out.last_mut() {
-                Some(last) if last.persona_url == purl => last.empresas.push(emp),
-                _ => out.push(PersoaRelacion {
-                    persona_url: purl,
-                    persona_nome: pnome,
-                    empresas: vec![emp],
-                }),
+        // Union-find sobre os nós (persoas e empresas) para atopar as
+        // compoñentes conexas. Os nós identifícanse cun prefixo "P:"/"E:" para
+        // que persoa e empresa co mesmo slug non colidan.
+        use std::collections::HashMap;
+        let mut idx: HashMap<String, usize> = HashMap::new();
+        let key_of = |prefix: char, url: &str, idx: &mut HashMap<String, usize>| -> usize {
+            let k = format!("{prefix}:{url}");
+            let n = idx.len();
+            *idx.entry(k).or_insert(n)
+        };
+        let mut edges: Vec<(usize, usize)> = Vec::with_capacity(arestas.len());
+        for a in &arestas {
+            let p = key_of('P', &a.persona_url, &mut idx);
+            let e = key_of('E', &a.empresa_url, &mut idx);
+            edges.push((p, e));
+        }
+        let mut parent: Vec<usize> = (0..idx.len()).collect();
+        fn find(parent: &mut [usize], mut x: usize) -> usize {
+            while parent[x] != x {
+                parent[x] = parent[parent[x]];
+                x = parent[x];
+            }
+            x
+        }
+        for &(p, e) in &edges {
+            let rp = find(&mut parent, p);
+            let re = find(&mut parent, e);
+            if rp != re {
+                parent[rp] = re;
             }
         }
+
+        // Acumular persoas e empresas distintas por compoñente (raíz).
+        #[derive(Default)]
+        struct Build {
+            persoas: HashMap<String, PersoaNodo>,
+            empresas: HashMap<String, EmpresaNodo>,
+        }
+        let mut grupos: HashMap<usize, Build> = HashMap::new();
+        for a in &arestas {
+            let root = find(&mut parent, idx[&format!("P:{}", a.persona_url)]);
+            let b = grupos.entry(root).or_default();
+            b.persoas
+                .entry(a.persona_url.clone())
+                .or_insert_with(|| PersoaNodo {
+                    persona_url: a.persona_url.clone(),
+                    persona_nome: a.persona_nome.clone(),
+                    num_empresas: 0,
+                })
+                .num_empresas += 1;
+            b.empresas
+                .entry(a.empresa_url.clone())
+                .or_insert_with(|| EmpresaNodo {
+                    empresa_url: a.empresa_url.clone(),
+                    empresa_nome: a.empresa_nome.clone(),
+                    provincia: a.provincia.clone(),
+                    num_contratos: a.num_contratos,
+                });
+        }
+
+        // Materializar e ordenar: dentro de cada grupo por nome; os grupos por
+        // número de razóns sociais (e logo de contratos) en orde descendente.
+        let mut out: Vec<GrupoRelacion> = grupos
+            .into_values()
+            .map(|b| {
+                let mut persoas: Vec<PersoaNodo> = b.persoas.into_values().collect();
+                persoas.sort_by(|a, b| a.persona_nome.to_lowercase().cmp(&b.persona_nome.to_lowercase()));
+                let mut empresas: Vec<EmpresaNodo> = b.empresas.into_values().collect();
+                empresas.sort_by(|a, b| a.empresa_nome.to_lowercase().cmp(&b.empresa_nome.to_lowercase()));
+                GrupoRelacion { persoas, empresas }
+            })
+            .collect();
+        out.sort_by(|a, b| {
+            let contratos = |g: &GrupoRelacion| g.empresas.iter().map(|e| e.num_contratos).sum::<i64>();
+            b.empresas
+                .len()
+                .cmp(&a.empresas.len())
+                .then_with(|| contratos(b).cmp(&contratos(a)))
+        });
         Ok(out)
     }
 }
@@ -1086,9 +1165,11 @@ mod tests {
         }
 
         let rel = db.relacions_compartidas().expect("relacions");
-        assert_eq!(rel.len(), 1, "debe haber unha persoa relacionada");
-        assert_eq!(rel[0].persona_url, "perez-perez-xan");
-        assert_eq!(rel[0].empresas.len(), 2, "controla dúas razóns sociais");
+        assert_eq!(rel.len(), 1, "debe haber un grupo relacionado");
+        assert_eq!(rel[0].persoas.len(), 1, "unha soa persoa conecta o grupo");
+        assert_eq!(rel[0].persoas[0].persona_url, "perez-perez-xan");
+        assert_eq!(rel[0].persoas[0].num_empresas, 2, "controla dúas razóns sociais");
+        assert_eq!(rel[0].empresas.len(), 2, "dúas razóns sociais no grupo");
         assert!(rel[0].empresas.iter().all(|e| e.num_contratos == 1));
 
         // E a entidade recupérase desde o nome do adxudicatario (insensible a puntuación).
@@ -1097,6 +1178,84 @@ mod tests {
             .expect("query")
             .expect("debe atoparse");
         assert_eq!(ent.url, "empresa-a-sl");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    // Dous administradores distintos que controlan AMBOS as mesmas dúas empresas
+    // deben caer nun único grupo (compoñente conexa), non en dúas tarxetas.
+    #[test]
+    fn dous_administradores_mesmas_empresas_un_so_grupo() {
+        use crate::model::{CargoRow, DatosCifEntidade};
+        let path = std::env::temp_dir().join("congal_test_trama.sqlite");
+        let _ = std::fs::remove_file(&path);
+        let mut db = Db::open(&path).expect("db");
+
+        db.upsert_summaries(
+            &[
+                summary("1", "obra", "Concello", "Formalizado", "01/02/2025"),
+                summary("2", "servizo", "Concello", "Formalizado", "03/04/2025"),
+            ],
+            "agora",
+        )
+        .expect("summaries");
+        db.upsert_detail(
+            &ContractDetail { contract_id: "1".into(), ..Default::default() },
+            &[Resolucion { adxudicatario: "Empresa A, S.L.".into(), ..Default::default() }],
+        )
+        .expect("detail 1");
+        db.upsert_detail(
+            &ContractDetail { contract_id: "2".into(), ..Default::default() },
+            &[Resolucion { adxudicatario: "EMPRESA B SL".into(), ..Default::default() }],
+        )
+        .expect("detail 2");
+
+        for (url, nome, adx) in [
+            ("empresa-a-sl", "EMPRESA A SL", "Empresa A, S.L."),
+            ("empresa-b-sl", "EMPRESA B SL", "EMPRESA B SL"),
+        ] {
+            db.upsert_datoscif_entidade(
+                &DatosCifEntidade {
+                    url: url.into(),
+                    nome: nome.into(),
+                    tipo_entidad: 1,
+                    uri: format!("/empresa/{url}"),
+                    ..Default::default()
+                },
+                true,
+                "agora",
+            )
+            .expect("entidade");
+            db.upsert_match(adx, Some(url), "exacta", "auto", "agora").expect("match");
+            // Dúas persoas distintas administran AMBAS empresas.
+            db.upsert_cargos(
+                url,
+                &[
+                    CargoRow {
+                        persona_url: "xan".into(),
+                        persona_nome: "Xan".into(),
+                        cargo: "Administrador".into(),
+                        activo: true,
+                        ..Default::default()
+                    },
+                    CargoRow {
+                        persona_url: "maria".into(),
+                        persona_nome: "Maria".into(),
+                        cargo: "Administradora".into(),
+                        activo: true,
+                        ..Default::default()
+                    },
+                ],
+                "agora",
+            )
+            .expect("cargos");
+        }
+
+        let rel = db.relacions_compartidas().expect("relacions");
+        assert_eq!(rel.len(), 1, "ambos administradores forman un único grupo");
+        assert_eq!(rel[0].persoas.len(), 2, "as dúas persoas no mesmo grupo");
+        assert_eq!(rel[0].empresas.len(), 2, "as dúas razóns sociais no grupo");
+        assert!(rel[0].persoas.iter().all(|p| p.num_empresas == 2));
 
         let _ = std::fs::remove_file(&path);
     }
