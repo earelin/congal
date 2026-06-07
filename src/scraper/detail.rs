@@ -448,6 +448,21 @@ mod tests {
     }
 
     #[test]
+    fn ute_de_participante_unico_extraese() {
+        // Contrato cun só participante que é unha UTE adxudicataria: a composición
+        // debe extraerse igual (do listado de licitadores), sen resolución sintética.
+        let bytes = include_bytes!("../../tests/fixtures/detalle_ute_solo_828260.html");
+        let html = crate::scraper::decode_bytes(bytes);
+        let (_d, res) = parse_detail("828260", &html);
+        let utes = parse_utes(&html, &res);
+        assert_eq!(utes.len(), 1, "debe extraerse a UTE adxudicataria");
+        let u = &utes[0];
+        assert_eq!(u.membros.len(), 2);
+        assert!(u.membros.iter().any(|m| m.cif == "B32487191"));
+        assert!(u.membros.iter().any(|m| m.cif == "B70242946"));
+    }
+
+    #[test]
     fn ute_perdedora_non_se_extrae() {
         // A UTE non gañou (o adxudicatario é outra empresa) → non se extrae.
         let bytes = include_bytes!("../../tests/fixtures/detalle_ute_822607.html");

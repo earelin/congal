@@ -53,6 +53,8 @@ pub struct App {
     selected_detail: Option<(ContractDetail, Vec<Resolucion>)>,
     /// Info de datoscif (entidade + cargos) por adxudicatario do contrato aberto.
     selected_datoscif: Vec<AdxDatosCif>,
+    /// Composición das UTE adxudicatarias do contrato aberto.
+    selected_utes: Vec<UteDetalle>,
 
     /// Pestana activa da vista principal.
     tab: Tab,
@@ -105,6 +107,21 @@ struct AdxDatosCif {
     cargos: Vec<CargoRow>,
 }
 
+/// Unha empresa membro dunha UTE para a ficha do contrato.
+struct UteMembroVista {
+    nome: String,
+    cif: String,
+    /// Entidade de datoscif do membro (por CIF), se está vinculada.
+    entidade: Option<DatosCifEntidade>,
+    cargos: Vec<CargoRow>,
+}
+
+/// A composición dunha UTE adxudicataria, para amosar na ficha do contrato.
+struct UteDetalle {
+    ute_nome: String,
+    membros: Vec<UteMembroVista>,
+}
+
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         theme::install_fonts(&cc.egui_ctx);
@@ -144,6 +161,7 @@ impl App {
             selected_row: None,
             selected_detail: None,
             selected_datoscif: Vec::new(),
+            selected_utes: Vec::new(),
             tab: Tab::Contratos,
             relacions: Vec::new(),
             relacions_loaded: false,
@@ -324,8 +342,30 @@ impl App {
     fn select_contract(&mut self, row: LocalRow) {
         self.selected_detail = self.db.load_detail(&row.id).ok().flatten();
         self.selected_datoscif = self.build_datoscif_info();
+        self.selected_utes = self.build_utes_info(&row.id);
         self.selected = Some(row.id.clone());
         self.selected_row = Some(row);
+    }
+
+    /// Composición das UTE adxudicatarias do contrato: cada membro coa súa entidade
+    /// de datoscif (por CIF) e os seus cargos, se está vinculada.
+    fn build_utes_info(&self, contract_id: &str) -> Vec<UteDetalle> {
+        let mut out: Vec<UteDetalle> = Vec::new();
+        for (ute_nome, nome, cif) in self.db.ute_membros_de_contrato(contract_id).unwrap_or_default()
+        {
+            let entidade = self.db.entidade_por_cif(&cif).ok().flatten();
+            let cargos = entidade
+                .as_ref()
+                .filter(|e| e.is_empresa())
+                .map(|e| self.db.cargos_de_empresa(&e.url).unwrap_or_default())
+                .unwrap_or_default();
+            let membro = UteMembroVista { nome, cif, entidade, cargos };
+            match out.iter_mut().find(|u| u.ute_nome == ute_nome) {
+                Some(u) => u.membros.push(membro),
+                None => out.push(UteDetalle { ute_nome, membros: vec![membro] }),
+            }
+        }
+        out
     }
 
     /// Reúne, para cada adxudicatario distinto do contrato aberto, a entidade de
@@ -361,6 +401,7 @@ impl App {
         self.selected_row = None;
         self.selected_detail = None;
         self.selected_datoscif.clear();
+        self.selected_utes.clear();
     }
 
     fn refresh_relacions(&mut self) {
@@ -966,6 +1007,8 @@ impl App {
 
             // Información de datoscif: quen está detrás de cada adxudicatario.
             render_datoscif(ui, &self.selected_datoscif);
+            // Composición das UTE adxudicatarias (empresas membro).
+            render_utes(ui, &self.selected_utes);
         });
     }
 
@@ -1429,39 +1472,93 @@ fn render_datoscif(ui: &mut egui::Ui, info: &[AdxDatosCif]) {
                     );
                 } else {
                     ui.add_space(4.0);
-                    let historico = if ui.visuals().dark_mode {
-                        Color32::from_rgb(0xF0, 0xB0, 0x30)
-                    } else {
-                        Color32::from_rgb(0xB5, 0x6A, 0x00)
-                    };
-                    for c in &a.cargos {
-                        ui.horizontal_wrapped(|ui| {
-                            if c.activo {
-                                ui.label(RichText::new("●").small());
-                                ui.label(RichText::new(&c.persona_nome).strong().small());
-                                if !c.cargo.is_empty() {
-                                    ui.label(RichText::new(format!("— {}", c.cargo)).small());
-                                }
-                            } else {
-                                // Cargo cesado: atenúase e márcase como histórico.
-                                ui.label(RichText::new("○").small().color(historico));
-                                ui.label(RichText::new(&c.persona_nome).small().color(Color32::GRAY));
-                                if !c.cargo.is_empty() {
-                                    ui.label(
-                                        RichText::new(format!("— {}", c.cargo))
-                                            .small()
-                                            .color(Color32::GRAY),
-                                    );
-                                }
-                                let marca = if c.hasta.is_empty() {
-                                    "· cesado".to_string()
-                                } else {
-                                    format!("· cesado o {}", format_data_gl(&c.hasta))
-                                };
-                                ui.label(RichText::new(marca).small().strong().color(historico));
-                            }
-                        });
+                    render_cargos(ui, &a.cargos);
+                }
+            }
+        });
+    }
+}
+
+/// Renderiza a lista de cargos dunha empresa: activos con ●; cesados con ○,
+/// atenuados e marcados como históricos (cor ámbar) coa data de cese.
+fn render_cargos(ui: &mut egui::Ui, cargos: &[CargoRow]) {
+    let historico = if ui.visuals().dark_mode {
+        Color32::from_rgb(0xF0, 0xB0, 0x30)
+    } else {
+        Color32::from_rgb(0xB5, 0x6A, 0x00)
+    };
+    for c in cargos {
+        ui.horizontal_wrapped(|ui| {
+            if c.activo {
+                ui.label(RichText::new("●").small());
+                ui.label(RichText::new(&c.persona_nome).strong().small());
+                if !c.cargo.is_empty() {
+                    ui.label(RichText::new(format!("— {}", c.cargo)).small());
+                }
+            } else {
+                ui.label(RichText::new("○").small().color(historico));
+                ui.label(RichText::new(&c.persona_nome).small().color(Color32::GRAY));
+                if !c.cargo.is_empty() {
+                    ui.label(RichText::new(format!("— {}", c.cargo)).small().color(Color32::GRAY));
+                }
+                let marca = if c.hasta.is_empty() {
+                    "· cesado".to_string()
+                } else {
+                    format!("· cesado o {}", format_data_gl(&c.hasta))
+                };
+                ui.label(RichText::new(marca).small().strong().color(historico));
+            }
+        });
+    }
+}
+
+/// Renderiza, na ficha do contrato, a composición das UTE adxudicatarias: cada
+/// empresa membro co seu CIF, e (se está vinculada) a súa ficha de datoscif e cargos.
+fn render_utes(ui: &mut egui::Ui, utes: &[UteDetalle]) {
+    if utes.is_empty() {
+        return;
+    }
+    ui.add_space(12.0);
+    ui.separator();
+    ui.add_space(6.0);
+    ui.label(RichText::new("Composición da UTE").strong());
+    for u in utes {
+        ui.add_space(6.0);
+        ui.group(|ui| {
+            ui.set_width(ui.available_width());
+            ui.label(RichText::new(&u.ute_nome).strong());
+            for m in &u.membros {
+                ui.add_space(4.0);
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("🏢");
+                    ui.label(RichText::new(&m.nome).strong());
+                    if !m.cif.is_empty() {
+                        ui.label(
+                            RichText::new(format!("· {}", m.cif))
+                                .small()
+                                .monospace()
+                                .color(Color32::GRAY),
+                        );
                     }
+                    match &m.entidade {
+                        Some(e) if !e.url.is_empty() => {
+                            ui.hyperlink_to(
+                                "↗ datoscif",
+                                format!("{DATOSCIF_BASE}/empresa/{}", e.url),
+                            );
+                        }
+                        _ => {
+                            ui.label(
+                                RichText::new("(sen vincular)")
+                                    .small()
+                                    .italics()
+                                    .color(Color32::GRAY),
+                            );
+                        }
+                    }
+                });
+                if !m.cargos.is_empty() {
+                    render_cargos(ui, &m.cargos);
                 }
             }
         });

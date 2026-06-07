@@ -85,7 +85,10 @@ The data flow is: **GUI → Worker thread → scraper/sync/db → events back to
     main resolution table; it lives in the hidden licitadores/formalización tables (still present
     in the HTML), from which `extract_nif_map` builds a name→NIF map keyed by `company_key`.
     `parse_utes` reads the same licitadores popup for **UTEs** (a `<li>` with a nested `<ul>` of
-    `CIF - NAME` members) and returns the **awarded** ones (UTE name matching an adxudicatario).
+    `CIF - NAME` members) and returns the **awarded** ones (UTE name matching an adxudicatario) —
+    works the same with a single participant. The contract detail view (`render_utes`) reflects
+    the UTE composition (members + their datoscif ficha/cargos, resolved by CIF via
+    `db::entidade_por_cif`).
     When the resolution shows the placeholder **«Múltiples adxudicatarios do procedemento»** (one
     contract awarded to several companies, NOT a UTE), `parse_multiples_adx` reads the hidden
     `ADX_NOM_*` (holds the CIF) / `ADX_CIF_*` (holds the name) inputs and **expands** it into one

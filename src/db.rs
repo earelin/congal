@@ -1000,6 +1000,53 @@ impl Db {
         Ok(out)
     }
 
+    /// Entidade de datoscif cun CIF dado (para resolver membros de UTE por CIF).
+    pub fn entidade_por_cif(&self, cif: &str) -> Result<Option<DatosCifEntidade>> {
+        if cif.trim().is_empty() {
+            return Ok(None);
+        }
+        let ent = self
+            .conn
+            .query_row(
+                r#"SELECT url, nome, tipo_entidad, COALESCE(uri,''), COALESCE(cif,''),
+                          COALESCE(domicilio,''), COALESCE(cod_postal,''),
+                          COALESCE(municipio,''), COALESCE(provincia,'')
+                   FROM datoscif_entidade WHERE cif = ?1 LIMIT 1"#,
+                params![cif],
+                |row| {
+                    Ok(DatosCifEntidade {
+                        url: row.get(0)?,
+                        nome: row.get(1)?,
+                        tipo_entidad: row.get(2)?,
+                        uri: row.get(3)?,
+                        cif: row.get(4)?,
+                        domicilio: row.get(5)?,
+                        cod_postal: row.get(6)?,
+                        municipio: row.get(7)?,
+                        provincia: row.get(8)?,
+                    })
+                },
+            )
+            .ok();
+        Ok(ent)
+    }
+
+    /// Membros das UTE adxudicatarias dun contrato: `(ute_nome, membro_nome,
+    /// membro_cif)`, para reflectir a composición na ficha do contrato.
+    pub fn ute_membros_de_contrato(&self, contract_id: &str) -> Result<Vec<(String, String, String)>> {
+        let mut stmt = self.conn.prepare(
+            r#"SELECT ute_nome, membro_nome, membro_cif
+               FROM ute_membro WHERE contract_id = ?1
+               ORDER BY ute_nome COLLATE NOCASE, membro_nome COLLATE NOCASE"#,
+        )?;
+        let out = stmt
+            .query_map(params![contract_id], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(out)
+    }
+
     /// Cargos dunha empresa (activos primeiro), co nome da persoa vía JOIN.
     pub fn cargos_de_empresa(&self, empresa_url: &str) -> Result<Vec<CargoRow>> {
         let mut stmt = self.conn.prepare(
