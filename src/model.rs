@@ -750,6 +750,37 @@ pub fn search_variants(adx_nome: &str) -> Vec<String> {
     out
 }
 
+/// Columna pola que se ordena o listado de contratos (clic na cabeceira).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SortColumn {
+    Id,
+    #[default]
+    Data,
+    Obxecto,
+    Importe,
+    Estado,
+    Organismo,
+    Adxudicatario,
+    ImporteResolucion,
+}
+
+impl SortColumn {
+    /// Expresión SQL pola que ordenar. Son fragmentos fixos (sen entrada do
+    /// usuario): non hai risco de inxección.
+    pub fn order_sql(self) -> &'static str {
+        match self {
+            SortColumn::Id => "CAST(c.id AS INTEGER)",
+            SortColumn::Data => "c.data_publicacion",
+            SortColumn::Obxecto => "c.asunto COLLATE NOCASE",
+            SortColumn::Importe => "c.importe_num",
+            SortColumn::Estado => "e.nome COLLATE NOCASE",
+            SortColumn::Organismo => "o.nome COLLATE NOCASE",
+            SortColumn::Adxudicatario => "r.adxudicatarios COLLATE NOCASE",
+            SortColumn::ImporteResolucion => "r.importe_total",
+        }
+    }
+}
+
 /// Filtros aplicados localmente sobre a base de datos (sen rede).
 #[derive(Debug, Clone, Default)]
 pub struct LocalFilters {
@@ -758,6 +789,9 @@ pub struct LocalFilters {
     pub estado: String,       // subcadea sobre estado
     pub year: String,         // ano de publicación
     pub adxudicatario: String, // subcadea sobre adxudicatario
+    /// Orde do listado (columna + ascendente). Por defecto: data descendente.
+    pub sort_col: SortColumn,
+    pub sort_asc: bool,
 }
 
 #[cfg(test)]

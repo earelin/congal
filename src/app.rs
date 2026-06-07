@@ -4,7 +4,7 @@
 use crate::db::{Db, DbStats, LocalOptions};
 use crate::model::{
     CargoRow, CasoRevision, ContractDetail, DatosCifEntidade, FilterOptions, Filters, LocalFilters,
-    GrupoRelacion, LocalRow, Resolucion, Suggestion, format_data_gl, format_importe,
+    GrupoRelacion, LocalRow, Resolucion, SortColumn, Suggestion, format_data_gl, format_importe,
 };
 use crate::enrich::EnrichMode;
 use crate::scraper::DATOSCIF_BASE;
@@ -835,6 +835,10 @@ impl App {
         } else {
             Color32::from_rgb(0xB5, 0x6A, 0x00)
         };
+        // Orde actual (cópiase para usala dentro do peche da cabeceira sen tomar
+        // prestado `self`); o clic recóllese e aplícase tras a táboa.
+        let (cur_col, cur_asc) = (self.local.sort_col, self.local.sort_asc);
+        let mut clicked_header: Option<SortColumn> = None;
         // Texto non seleccionable nas celas: así o cursor non entra en modo
         // inserción de texto e o clic chega á fila enteira (sense ::click).
         ui.style_mut().interaction.selectable_labels = false;
@@ -859,24 +863,35 @@ impl App {
             .column(Column::remainder().at_least(150.0).clip(true).resizable(false))
             .column(Column::initial(120.0))
             .header(24.0, |mut h| {
-                // (título, aliñado á dereita) — ID e importes numéricos á dereita.
-                for (t, dereita) in [
-                    ("ID", true),
-                    ("Data", false),
-                    ("Obxecto", false),
-                    ("Importe", true),
-                    ("Estado", false),
-                    ("Organismo", false),
-                    ("Adxudicatario", false),
-                    ("Imp. resolución", true),
+                // (título, columna de orde, aliñado á dereita). Premer ordena;
+                // volver premer inverte. A columna activa resáltase e leva frecha.
+                for (t, col, dereita) in [
+                    ("ID", SortColumn::Id, true),
+                    ("Data", SortColumn::Data, false),
+                    ("Obxecto", SortColumn::Obxecto, false),
+                    ("Importe", SortColumn::Importe, true),
+                    ("Estado", SortColumn::Estado, false),
+                    ("Organismo", SortColumn::Organismo, false),
+                    ("Adxudicatario", SortColumn::Adxudicatario, false),
+                    ("Imp. resolución", SortColumn::ImporteResolucion, true),
                 ] {
+                    let activa = cur_col == col;
+                    let etiqueta = if activa {
+                        format!("{t} {}", if cur_asc { "▲" } else { "▼" })
+                    } else {
+                        t.to_string()
+                    };
                     h.col(|ui| {
-                        if dereita {
+                        let resp = if dereita {
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                ui.strong(t);
-                            });
+                                ui.selectable_label(activa, RichText::new(etiqueta).strong())
+                            })
+                            .inner
                         } else {
-                            ui.strong(t);
+                            ui.selectable_label(activa, RichText::new(etiqueta).strong())
+                        };
+                        if resp.clicked() {
+                            clicked_header = Some(col);
                         }
                     });
                 }
@@ -930,6 +945,16 @@ impl App {
                     });
                 }
             });
+        if let Some(col) = clicked_header {
+            // Mesma columna: inverte; nova columna: orde ascendente.
+            if self.local.sort_col == col {
+                self.local.sort_asc = !self.local.sort_asc;
+            } else {
+                self.local.sort_col = col;
+                self.local.sort_asc = true;
+            }
+            self.need_query = true;
+        }
         if let Some(row) = clicked {
             self.select_contract(row);
         }

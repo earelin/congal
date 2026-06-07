@@ -137,7 +137,9 @@ The data flow is: **GUI → Worker thread → scraper/sync/db → events back to
   `query_local` powers the offline Local tab (one row per contract, lotes aggregated;
   importe/date/organismo are derived for display), including search by adxudicatario. It also
   flags `LocalRow.participante_unico` (`MAX(participacion) == 1`) so the listing marks single-bidder
-  contracts with a ⚠ icon (a possible irregularity signal).
+  contracts with a ⚠ icon (a possible irregularity signal). The listing is sortable by clicking a
+  column header: `LocalFilters.sort_col`/`sort_asc` drive a dynamic `ORDER BY`
+  (`SortColumn::order_sql`, fixed expressions; numbers/dates sort by their stored numeric/ISO value).
 
 - **`model.rs`** — all domain types and pure helpers. Notable: `EstadoGroup` maps the four
   UI status checkboxes to the numeric `ESTADO` codes the server expects; `parse_importe` /

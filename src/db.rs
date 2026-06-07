@@ -494,7 +494,13 @@ impl Db {
         );
         let (where_sql, args) = local_where(f);
         sql.push_str(&where_sql);
-        sql.push_str(" ORDER BY c.data_publicacion DESC, c.id DESC LIMIT 5000");
+        // Orde escollida na cabeceira (expresión fixa, sen entrada do usuario);
+        // os valores baleiros/NULL van ao final, e o id desempata de xeito estable.
+        let dir = if f.sort_asc { "ASC" } else { "DESC" };
+        sql.push_str(&format!(
+            " ORDER BY {} {dir} NULLS LAST, c.id DESC LIMIT 5000",
+            f.sort_col.order_sql()
+        ));
 
         let mut stmt = self.conn.prepare(&sql)?;
         let params_dyn: Vec<&dyn rusqlite::ToSql> =
@@ -1495,6 +1501,39 @@ mod tests {
         assert!(unico("1"), "1 participante → marcado");
         assert!(!unico("2"), "3 participantes → non marcado");
         assert!(!unico("3"), "sen resolución → non marcado");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    // O listado ordénase pola columna escollida: o ID por valor numérico (non
+    // lexicográfico) e a data cronoloxicamente (orde ISO, non a visual).
+    #[test]
+    fn ordena_o_listado_por_columna() {
+        use crate::model::SortColumn;
+        let path = std::env::temp_dir().join("congal_test_sort.sqlite");
+        let _ = std::fs::remove_file(&path);
+        let mut db = Db::open(&path).expect("db");
+        db.upsert_summaries(
+            &[
+                summary("10", "a", "Org", "Adxudicado", "01/02/2025"),
+                summary("2", "b", "Org", "Adxudicado", "03/02/2025"),
+                summary("100", "c", "Org", "Adxudicado", "02/02/2025"),
+            ],
+            "agora",
+        )
+        .expect("sum");
+        let ids = |f: &LocalFilters| -> Vec<String> {
+            db.query_local(f).unwrap().into_iter().map(|r| r.id).collect()
+        };
+
+        let mut f = LocalFilters { sort_col: SortColumn::Id, sort_asc: true, ..Default::default() };
+        assert_eq!(ids(&f), ["2", "10", "100"], "ID ascendente numérico");
+        f.sort_asc = false;
+        assert_eq!(ids(&f), ["100", "10", "2"], "ID descendente numérico");
+
+        f.sort_col = SortColumn::Data;
+        f.sort_asc = true;
+        assert_eq!(ids(&f), ["10", "100", "2"], "data cronolóxica (01/02, 02/02, 03/02)");
 
         let _ = std::fs::remove_file(&path);
     }
