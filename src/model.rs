@@ -278,6 +278,9 @@ pub struct LocalRow {
     pub adxudicatario: String,
     pub importe_resolucion_txt: String,
     pub enlace_resolucion: String,
+    /// `true` se na resolución consta un único participante (posible indicio de
+    /// que algo non é regular). Derívase de `MAX(participacion) == 1`.
+    pub participante_unico: bool,
 }
 
 // ───────────────────────── datoscif.es: entidades e cargos ─────────────────

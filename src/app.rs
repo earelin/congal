@@ -829,6 +829,12 @@ impl App {
     fn results_table(&mut self, ui: &mut egui::Ui) {
         let mut clicked: Option<LocalRow> = None;
         let selected = self.selected.clone();
+        // Cor de resalte para os contratos cun único participante.
+        let aviso = if self.dark {
+            Color32::from_rgb(0xF0, 0xB0, 0x30)
+        } else {
+            Color32::from_rgb(0xB5, 0x6A, 0x00)
+        };
         // Texto non seleccionable nas celas: así o cursor non entra en modo
         // inserción de texto e o clic chega á fila enteira (sense ::click).
         ui.style_mut().interaction.selectable_labels = false;
@@ -868,6 +874,11 @@ impl App {
                     body.row(22.0, |mut row| {
                         row.set_selected(is_sel);
                         row.col(|ui| {
+                            if r.participante_unico {
+                                ui.label(RichText::new("⚠").color(aviso)).on_hover_text(
+                                    "Un só participante presentado (posible indicio de irregularidade)",
+                                );
+                            }
                             ui.label(&r.id);
                         });
                         row.col(|ui| {

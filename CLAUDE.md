@@ -135,7 +135,9 @@ The data flow is: **GUI → Worker thread → scraper/sync/db → events back to
   WAL mode, foreign keys on. The project is a **prototype**: no schema versioning/migration —
   delete the local `.sqlite` to apply schema changes. `upsert_*` are the write paths;
   `query_local` powers the offline Local tab (one row per contract, lotes aggregated;
-  importe/date/organismo are derived for display), including search by adxudicatario.
+  importe/date/organismo are derived for display), including search by adxudicatario. It also
+  flags `LocalRow.participante_unico` (`MAX(participacion) == 1`) so the listing marks single-bidder
+  contracts with a ⚠ icon (a possible irregularity signal).
 
 - **`model.rs`** — all domain types and pure helpers. Notable: `EstadoGroup` maps the four
   UI status checkboxes to the numeric `ESTADO` codes the server expects; `parse_importe` /
