@@ -1,9 +1,11 @@
 //! Cliente HTTP e funcións de extracción contra contratosdegalicia.gal.
 
+mod datoscif;
 mod detail;
 mod options;
 mod search;
 
+pub use datoscif::{DATOSCIF_BASE, fetch_cargos, fetch_empresa_info, search_entities};
 pub use detail::fetch_detail;
 pub use options::load_filter_options;
 pub use search::search;

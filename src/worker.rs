@@ -1,6 +1,7 @@
 //! Fío traballador en segundo plano e canle de eventos cara á interface.
 
 use crate::db::Db;
+use crate::enrich::{self, EnrichResult};
 use crate::model::{FilterOptions, Filters, LocalFilters};
 use crate::scraper::{self, Client};
 use crate::sync::{self, SyncResult};
@@ -14,6 +15,8 @@ use std::thread;
 pub enum Command {
     LoadOptions,
     Sync(Filters),
+    /// Vincula os adxudicatarios con datoscif e descarga os cargos das empresas.
+    Enrich,
     Export {
         path: PathBuf,
         filters: LocalFilters,
@@ -31,6 +34,7 @@ pub enum Event {
         msg: String,
     },
     SyncDone(SyncResult),
+    EnrichDone(EnrichResult),
     Exported(PathBuf, usize),
     Error(String),
     Log(String),
@@ -87,6 +91,17 @@ impl Worker {
                             Err(e) => {
                                 let _ = tx_evt
                                     .send(Event::Error(format!("Erro na sincronización: {e}")));
+                            }
+                        }
+                    }
+                    Command::Enrich => {
+                        match enrich::run_enrich(&client, &mut db, &tx_evt, &cancel_thread) {
+                            Ok(r) => {
+                                let _ = tx_evt.send(Event::EnrichDone(r));
+                            }
+                            Err(e) => {
+                                let _ = tx_evt
+                                    .send(Event::Error(format!("Erro no enriquecemento: {e}")));
                             }
                         }
                     }

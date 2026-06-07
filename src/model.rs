@@ -262,6 +262,265 @@ pub struct LocalRow {
     pub enlace_resolucion: String,
 }
 
+// ───────────────────────── datoscif.es: entidades e cargos ─────────────────
+
+/// Suxestión devolta polo buscador de datoscif (`/sugerencias.ajax`).
+#[derive(Debug, Clone, Deserialize)]
+pub struct Suggestion {
+    pub nombre: String,
+    /// Slug canónico da entidade (p.ex. `inditex-sa`), clave estable en datoscif.
+    pub url: String,
+    #[serde(default)]
+    pub uri: String,
+    /// 1 = empresa, 2 = persoa.
+    pub tipo_entidad: i64,
+}
+
+/// Entidade de datoscif (empresa ou persoa) tal como a gardamos.
+#[derive(Debug, Clone, Default)]
+pub struct DatosCifEntidade {
+    pub url: String,
+    pub nome: String,
+    pub tipo_entidad: i64,
+    pub uri: String,
+    // Datos da persoa xurídica (só empresas; baleiro nas persoas).
+    pub cif: String,
+    pub domicilio: String,
+    pub cod_postal: String,
+    pub municipio: String,
+    pub provincia: String,
+}
+
+impl DatosCifEntidade {
+    pub fn is_empresa(&self) -> bool {
+        self.tipo_entidad == 1
+    }
+}
+
+/// Ficha da persoa xurídica extraída da páxina HTML da empresa en datoscif.
+#[derive(Debug, Clone, Default)]
+pub struct EmpresaInfo {
+    pub cif: String,
+    pub domicilio: String,
+    pub cod_postal: String,
+    pub municipio: String,
+    pub provincia: String,
+}
+
+/// Un cargo (relación persoa→empresa) para amosar na vista de detalle.
+#[derive(Debug, Clone, Default)]
+pub struct CargoRow {
+    pub persona_url: String,
+    pub persona_nome: String,
+    pub cargo: String,
+    pub desde: String,
+    pub hasta: String,
+    pub activo: bool,
+}
+
+/// Unha empresa controlada por unha persoa que ademais aparece como
+/// adxudicataria nos contratos.
+#[derive(Debug, Clone)]
+pub struct EmpresaRelacionada {
+    pub empresa_url: String,
+    pub empresa_nome: String,
+    pub provincia: String,
+    pub cargo: String,
+    pub num_contratos: i64,
+}
+
+/// Persoa que controla varias razóns sociais presentes nos contratos.
+#[derive(Debug, Clone)]
+pub struct PersoaRelacion {
+    pub persona_url: String,
+    pub persona_nome: String,
+    pub empresas: Vec<EmpresaRelacionada>,
+}
+
+/// Nivel de confianza do emparellamento adxudicatario ↔ entidade de datoscif.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Confianza {
+    /// Nome normalizado idéntico.
+    Exacta,
+    /// Idéntico tras eliminar o sufixo de razón social (SL, SA…).
+    Nucleo,
+    /// Persoa: mesmos tokens de nome sen importar a orde.
+    Tokens,
+    /// Varios candidatos igual de bos: non se vincula.
+    Ambigua,
+    /// Ningún candidato casa.
+    SenMatch,
+}
+
+impl Confianza {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Confianza::Exacta => "exacta",
+            Confianza::Nucleo => "nucleo",
+            Confianza::Tokens => "tokens",
+            Confianza::Ambigua => "ambigua",
+            Confianza::SenMatch => "sen_match",
+        }
+    }
+
+    /// Indica se o emparellamento é dabondo fiable como para vincularse só.
+    pub fn is_auto(self) -> bool {
+        matches!(self, Confianza::Exacta | Confianza::Nucleo | Confianza::Tokens)
+    }
+}
+
+/// Estado de revisión dun emparellamento (a revisión manual queda para o futuro).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EstadoMatch {
+    /// Vinculado automaticamente por alta confianza.
+    Auto,
+    /// Sen vínculo: pendente de revisión manual.
+    Pendente,
+}
+
+impl EstadoMatch {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            EstadoMatch::Auto => "auto",
+            EstadoMatch::Pendente => "pendente",
+        }
+    }
+}
+
+/// Sufixos de razón social (xa normalizados, sen puntos) que se eliminan ao
+/// comparar nomes de empresa, xa que poden non coincidir entre as dúas fontes.
+const LEGAL_SUFFIXES: &[&str] = &[
+    "slu", "slne", "sll", "slp", "sl", "slu", "srl", "srlu", "sau", "sal", "sa",
+    "scoop", "coop", "scp", "sc", "aie", "ute", "cb", "sociedad", "limitada",
+    "anonima",
+];
+
+/// Clave de comparación dun nome: minúsculas, sen acentos, **sen puntos/comas**
+/// (S.L. → sl) e co resto de signos convertidos en espazo. Base do fuzzy match.
+pub fn company_key(s: &str) -> String {
+    let lowered = normalize_search(s);
+    let mut buf = String::with_capacity(lowered.len());
+    for c in lowered.chars() {
+        match c {
+            // Puntos, comas e apóstrofos elimínanse sen deixar oco (S.L. → sl).
+            '.' | ',' | '\'' | '"' | '`' | '·' => {}
+            c if c.is_alphanumeric() || c == ' ' => buf.push(c),
+            // Guións, barras, &, paréntese… sepáranse como espazo.
+            _ => buf.push(' '),
+        }
+    }
+    buf.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Elimina os sufixos de razón social finais dunha clave xa normalizada.
+pub fn strip_legal_suffix(key: &str) -> String {
+    let mut tokens: Vec<&str> = key.split_whitespace().collect();
+    while tokens.len() > 1 && LEGAL_SUFFIXES.contains(tokens.last().unwrap()) {
+        tokens.pop();
+    }
+    tokens.join(" ")
+}
+
+/// Núcleo dun nome de empresa: clave sen o sufixo de razón social.
+pub fn company_core(s: &str) -> String {
+    strip_legal_suffix(&company_key(s))
+}
+
+/// Multiset ordenado de tokens dunha clave (para comparar nomes de persoa sen
+/// importar a orde: «nome apelido1 apelido2» vs «apelido1 apelido2 nome»).
+fn token_multiset(key: &str) -> Vec<String> {
+    let mut t: Vec<String> = key.split_whitespace().map(str::to_string).collect();
+    t.sort();
+    t
+}
+
+/// Resultado de escoller un candidato dentro dun nivel de confianza.
+enum Pick {
+    Empty,
+    One(String),
+    Many,
+}
+
+/// Deduplica un grupo de slugs candidatos e decide se hai un único gañador.
+fn pick(pool: &mut Vec<String>) -> Pick {
+    pool.sort();
+    pool.dedup();
+    match pool.len() {
+        0 => Pick::Empty,
+        1 => Pick::One(pool.remove(0)),
+        _ => Pick::Many,
+    }
+}
+
+/// Escolle a mellor entidade de datoscif para un adxudicatario, con prioridade
+/// Exacta > Núcleo (empresa) > Tokens (persoa). Só devolve `Some(url)` se hai un
+/// único gañador no mellor nivel; se hai empate devolve `(None, Ambigua)`.
+pub fn best_match(adx_nome: &str, suggestions: &[Suggestion]) -> (Option<String>, Confianza) {
+    let akey = company_key(adx_nome);
+    if akey.is_empty() {
+        return (None, Confianza::SenMatch);
+    }
+    let acore = company_core(adx_nome);
+    let atoks = token_multiset(&akey);
+
+    let mut exacta: Vec<String> = Vec::new();
+    let mut nucleo: Vec<String> = Vec::new();
+    let mut tokens: Vec<String> = Vec::new();
+    for s in suggestions {
+        let ckey = company_key(&s.nombre);
+        if ckey.is_empty() {
+            continue;
+        }
+        if ckey == akey {
+            exacta.push(s.url.clone());
+        } else if s.tipo_entidad == 1 {
+            if !acore.is_empty() && strip_legal_suffix(&ckey) == acore {
+                nucleo.push(s.url.clone());
+            }
+        } else if s.tipo_entidad == 2 && atoks.len() >= 2 && token_multiset(&ckey) == atoks {
+            tokens.push(s.url.clone());
+        }
+    }
+
+    for (mut pool, conf) in [
+        (exacta, Confianza::Exacta),
+        (nucleo, Confianza::Nucleo),
+        (tokens, Confianza::Tokens),
+    ] {
+        match pick(&mut pool) {
+            Pick::One(url) => return (Some(url), conf),
+            Pick::Many => return (None, Confianza::Ambigua),
+            Pick::Empty => {}
+        }
+    }
+    (None, Confianza::SenMatch)
+}
+
+/// Variantes do nome dun adxudicatario coas que buscar en datoscif. Para persoas
+/// («NOME APELIDO1 APELIDO2») reordénase movendo o primeiro token ao final para
+/// casar co patrón de datoscif («APELIDO1 APELIDO2 NOME»), xa que a busca é por
+/// subcadea sobre o nome gardado.
+pub fn search_variants(adx_nome: &str) -> Vec<String> {
+    let key = company_key(adx_nome);
+    let mut out = vec![key.clone()];
+    let toks: Vec<&str> = key.split_whitespace().collect();
+    // Só ten sentido reordenar cando semella unha persoa: 2-4 tokens e sen
+    // sufixo de razón social.
+    let semella_persoa = (2..=4).contains(&toks.len()) && strip_legal_suffix(&key) == key;
+    if semella_persoa {
+        // Primeiro token ao final: «nome a1 a2» → «a1 a2 nome».
+        let mut rot = toks[1..].to_vec();
+        rot.push(toks[0]);
+        out.push(rot.join(" "));
+        // Só os apelidos (tokens 2..n), que adoitan ser máis distintivos.
+        if toks.len() >= 3 {
+            out.push(toks[1..].join(" "));
+        }
+    }
+    out.dedup();
+    out
+}
+
 /// Filtros aplicados localmente sobre a base de datos (sen rede).
 #[derive(Debug, Clone, Default)]
 pub struct LocalFilters {
@@ -343,5 +602,78 @@ mod tests {
         for c in ["1", "2", "3", "4", "5", "6", "7", "8"] {
             assert!(p.contains(c), "falta o código {c} en {p}");
         }
+    }
+
+    fn sug(nombre: &str, url: &str, tipo: i64) -> Suggestion {
+        Suggestion {
+            nombre: nombre.into(),
+            url: url.into(),
+            uri: String::new(),
+            tipo_entidad: tipo,
+        }
+    }
+
+    #[test]
+    fn clave_empresa_quita_puntos_e_acentos() {
+        assert_eq!(company_key("Construccións S.L."), "construccions sl");
+        assert_eq!(company_key("Obras, Pinturas y Más S.A."), "obras pinturas y mas sa");
+        assert_eq!(company_core("INDITEX MODA S.L."), "inditex moda");
+        // O sufixo non importa: mesmo núcleo con SL ou SA.
+        assert_eq!(company_core("Foo SL"), company_core("FOO, S.A."));
+    }
+
+    #[test]
+    fn match_empresa_exacta_e_por_nucleo() {
+        let cands = [
+            sug("INDITEX MODA SL", "inditex-moda-sl", 1),
+            sug("INDITEX SA", "inditex-sa", 1),
+        ];
+        // Exacta tras normalizar puntuación.
+        let (url, c) = best_match("Inditex Moda, S.L.", &cands);
+        assert_eq!(url.as_deref(), Some("inditex-moda-sl"));
+        assert_eq!(c, Confianza::Exacta);
+        // Núcleo: o adxudicatario trae outro sufixo (SLU) pero o núcleo casa.
+        let (url, c) = best_match("INDITEX MODA SLU", &cands);
+        assert_eq!(url.as_deref(), Some("inditex-moda-sl"));
+        assert_eq!(c, Confianza::Nucleo);
+    }
+
+    #[test]
+    fn match_persoa_reordenada_por_tokens() {
+        // Contratos: «nome apelido1 apelido2»; datoscif: «apelido1 apelido2 nome».
+        let cands = [sug("Garcia Lopez Manuel", "garcia-lopez-manuel", 2)];
+        let (url, c) = best_match("MANUEL GARCÍA LÓPEZ", &cands);
+        assert_eq!(url.as_deref(), Some("garcia-lopez-manuel"));
+        assert_eq!(c, Confianza::Tokens);
+    }
+
+    #[test]
+    fn match_ambiguo_non_vincula() {
+        // Dúas empresas distintas co mesmo núcleo: empate → ambigua, sen vínculo.
+        let cands = [
+            sug("Foo SL", "foo-sl", 1),
+            sug("Foo SA", "foo-sa", 1),
+        ];
+        let (url, c) = best_match("FOO", &cands);
+        assert_eq!(url, None);
+        assert_eq!(c, Confianza::Ambigua);
+    }
+
+    #[test]
+    fn match_sen_candidatos() {
+        let (url, c) = best_match("Empresa Inexistente SL", &[]);
+        assert_eq!(url, None);
+        assert_eq!(c, Confianza::SenMatch);
+    }
+
+    #[test]
+    fn variantes_de_busca_para_persoa() {
+        let v = search_variants("MANUEL GARCÍA LÓPEZ");
+        assert!(v.contains(&"manuel garcia lopez".to_string()));
+        assert!(v.contains(&"garcia lopez manuel".to_string())); // reordenada
+        assert!(v.contains(&"garcia lopez".to_string())); // só apelidos
+        // Unha empresa con sufixo non se reordena.
+        let v = search_variants("Inditex Moda SL");
+        assert_eq!(v, vec!["inditex moda sl".to_string()]);
     }
 }

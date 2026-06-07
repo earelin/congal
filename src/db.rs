@@ -1,8 +1,9 @@
 //! Persistencia en SQLite (rusqlite, bundled).
 
 use crate::model::{
-    ContractDetail, ContractSummary, LocalFilters, LocalRow, Resolucion, format_data_gl,
-    format_importe, normalize_search, parse_data, parse_importe,
+    CargoRow, ContractDetail, ContractSummary, DatosCifEntidade, EmpresaRelacionada, LocalFilters,
+    LocalRow, PersoaRelacion, Resolucion, company_key, format_data_gl, format_importe,
+    normalize_search, parse_data, parse_importe,
 };
 use anyhow::Result;
 use rusqlite::functions::FunctionFlags;
@@ -58,6 +59,18 @@ impl Db {
                 // Tolerante a NULL (p.ex. adxudicatario nun LEFT JOIN sen resolución).
                 let s = ctx.get::<Option<String>>(0)?;
                 Ok(s.as_deref().map(normalize_search).unwrap_or_default())
+            },
+        )?;
+        // Función SQL `cokey(x)`: clave de comparación de nomes de empresa
+        // (minúsculas, sen acentos nin puntuación), para unir os adxudicatarios
+        // dos contratos coa táboa `adxudicatario_match`.
+        conn.create_scalar_function(
+            "cokey",
+            1,
+            FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
+            |ctx| {
+                let s = ctx.get::<Option<String>>(0)?;
+                Ok(s.as_deref().map(company_key).unwrap_or_default())
             },
         )?;
         let db = Db { conn };
@@ -146,8 +159,60 @@ impl Db {
                 clave TEXT PRIMARY KEY,
                 valor TEXT
             );
+
+            -- ───────── Enriquecemento con datoscif.es ─────────
+            -- Entidades (empresas e persoas) identificadas polo seu slug canónico.
+            CREATE TABLE IF NOT EXISTS datoscif_entidade (
+                url                TEXT PRIMARY KEY,   -- slug, p.ex. 'inditex-sa'
+                nome               TEXT NOT NULL,
+                tipo_entidad       INTEGER NOT NULL,   -- 1=empresa, 2=persoa
+                uri                TEXT,
+                cif                TEXT,               -- só empresas
+                domicilio          TEXT,
+                cod_postal         TEXT,
+                municipio          TEXT,
+                provincia          TEXT,
+                cargos_descargados INTEGER NOT NULL DEFAULT 0,
+                actualizado_en     TEXT
+            );
+
+            -- Cargos: relación persoa→empresa cun rol e vixencia.
+            CREATE TABLE IF NOT EXISTS datoscif_cargo (
+                empresa_url TEXT NOT NULL REFERENCES datoscif_entidade(url) ON DELETE CASCADE,
+                persona_url TEXT NOT NULL REFERENCES datoscif_entidade(url) ON DELETE CASCADE,
+                cargo       TEXT,
+                activo      INTEGER,   -- 1 se segue vixente (sen data 'hasta')
+                desde       TEXT,      -- ISO 8601
+                hasta       TEXT,      -- ISO 8601
+                PRIMARY KEY (empresa_url, persona_url, cargo, desde)
+            );
+
+            -- Vínculo entre o nome dun adxudicatario dos contratos e unha entidade
+            -- de datoscif. A clave é o nome normalizado (company_key), que une cos
+            -- contratos vía a función SQL cokey(adxudicatario).
+            CREATE TABLE IF NOT EXISTS adxudicatario_match (
+                adx_key        TEXT PRIMARY KEY,
+                adx_nome       TEXT NOT NULL,
+                datoscif_url   TEXT REFERENCES datoscif_entidade(url),  -- NULL se sen vínculo
+                confianza      TEXT NOT NULL,
+                estado         TEXT NOT NULL,
+                actualizado_en TEXT
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_cargo_persona ON datoscif_cargo(persona_url);
+            CREATE INDEX IF NOT EXISTS idx_cargo_empresa ON datoscif_cargo(empresa_url);
+            CREATE INDEX IF NOT EXISTS idx_match_url     ON adxudicatario_match(datoscif_url);
             "#,
         )?;
+        // Migración aditiva para bases de datos que xa tiñan `datoscif_entidade`
+        // sen as columnas da ficha. SQLite non ten "ADD COLUMN IF NOT EXISTS";
+        // ignórase o erro de columna duplicada.
+        for col in ["cif", "domicilio", "cod_postal", "municipio", "provincia"] {
+            let _ = self.conn.execute(
+                &format!("ALTER TABLE datoscif_entidade ADD COLUMN {col} TEXT"),
+                [],
+            );
+        }
         Ok(())
     }
 
@@ -527,6 +592,250 @@ impl Db {
         }
         Ok(out)
     }
+
+    // ───────────────────── Enriquecemento con datoscif.es ─────────────────────
+
+    /// Adxudicatarios distintos (por clave normalizada) que aínda non teñen
+    /// ningún rexistro en `adxudicatario_match`; devólvese un nome representativo.
+    pub fn adxudicatarios_pendentes(&self) -> Result<Vec<String>> {
+        self.distinct(
+            "SELECT MIN(TRIM(adxudicatario)) FROM contract_resolucion \
+             WHERE TRIM(COALESCE(adxudicatario,'')) <> '' \
+               AND cokey(adxudicatario) NOT IN (SELECT adx_key FROM adxudicatario_match) \
+             GROUP BY cokey(adxudicatario) \
+             ORDER BY 1 COLLATE NOCASE",
+        )
+    }
+
+    /// Garda (ou actualiza) o resultado dun emparellamento. `datoscif_url` é
+    /// `None` cando non houbo vínculo fiable.
+    pub fn upsert_match(
+        &self,
+        adx_nome: &str,
+        datoscif_url: Option<&str>,
+        confianza: &str,
+        estado: &str,
+        now: &str,
+    ) -> Result<()> {
+        let key = company_key(adx_nome);
+        self.conn.execute(
+            r#"INSERT INTO adxudicatario_match
+                (adx_key, adx_nome, datoscif_url, confianza, estado, actualizado_en)
+               VALUES (?1,?2,?3,?4,?5,?6)
+               ON CONFLICT(adx_key) DO UPDATE SET
+                 adx_nome=excluded.adx_nome, datoscif_url=excluded.datoscif_url,
+                 confianza=excluded.confianza, estado=excluded.estado,
+                 actualizado_en=excluded.actualizado_en"#,
+            params![key, adx_nome, datoscif_url, confianza, estado, now],
+        )?;
+        Ok(())
+    }
+
+    /// Inserta/actualiza unha entidade de datoscif. `cargos_descargados` é
+    /// "pegañento": unha vez a 1 non volve a 0.
+    pub fn upsert_datoscif_entidade(
+        &self,
+        ent: &DatosCifEntidade,
+        cargos_descargados: bool,
+        now: &str,
+    ) -> Result<()> {
+        self.conn.execute(
+            r#"INSERT INTO datoscif_entidade
+                (url, nome, tipo_entidad, uri, cif, domicilio, cod_postal, municipio,
+                 provincia, cargos_descargados, actualizado_en)
+               VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)
+               ON CONFLICT(url) DO UPDATE SET
+                 nome=excluded.nome, tipo_entidad=excluded.tipo_entidad,
+                 uri=excluded.uri, cif=excluded.cif, domicilio=excluded.domicilio,
+                 cod_postal=excluded.cod_postal, municipio=excluded.municipio,
+                 provincia=excluded.provincia,
+                 cargos_descargados=MAX(datoscif_entidade.cargos_descargados, excluded.cargos_descargados),
+                 actualizado_en=excluded.actualizado_en"#,
+            params![
+                ent.url,
+                ent.nome,
+                ent.tipo_entidad,
+                ent.uri,
+                ent.cif,
+                ent.domicilio,
+                ent.cod_postal,
+                ent.municipio,
+                ent.provincia,
+                cargos_descargados as i64,
+                now
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Substitúe os cargos dunha empresa e dá de alta as persoas implicadas.
+    /// Garante que existe a fila da empresa en `datoscif_entidade` (as FK de
+    /// `datoscif_cargo` apuntan a ela), sen pisar os datos se xa existe.
+    pub fn upsert_cargos(&mut self, empresa_url: &str, cargos: &[CargoRow], now: &str) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        // A empresa pode aínda non estar gardada; créase cun nome provisional
+        // (o `enrich` actualízao despois cos datos reais).
+        tx.execute(
+            r#"INSERT OR IGNORE INTO datoscif_entidade (url, nome, tipo_entidad, uri, actualizado_en)
+               VALUES (?1, ?1, 1, ?2, ?3)"#,
+            params![empresa_url, format!("/empresa/{empresa_url}"), now],
+        )?;
+        tx.execute(
+            "DELETE FROM datoscif_cargo WHERE empresa_url = ?1",
+            params![empresa_url],
+        )?;
+        {
+            // Alta da persoa (sen pisar cargos_descargados se xa existise).
+            let mut per_stmt = tx.prepare(
+                r#"INSERT INTO datoscif_entidade (url, nome, tipo_entidad, uri, actualizado_en)
+                   VALUES (?1,?2,2,?3,?4)
+                   ON CONFLICT(url) DO UPDATE SET nome=excluded.nome, uri=excluded.uri"#,
+            )?;
+            let mut car_stmt = tx.prepare(
+                r#"INSERT OR IGNORE INTO datoscif_cargo
+                    (empresa_url, persona_url, cargo, activo, desde, hasta)
+                   VALUES (?1,?2,?3,?4,?5,?6)"#,
+            )?;
+            for c in cargos {
+                let uri = format!("/directivo/{}", c.persona_url);
+                per_stmt.execute(params![c.persona_url, c.persona_nome, uri, now])?;
+                car_stmt.execute(params![
+                    empresa_url,
+                    c.persona_url,
+                    c.cargo,
+                    c.activo as i64,
+                    c.desde,
+                    c.hasta,
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Entidade de datoscif vinculada a un adxudicatario, se a hai.
+    pub fn entidade_de_adxudicatario(&self, adx_nome: &str) -> Result<Option<DatosCifEntidade>> {
+        let key = company_key(adx_nome);
+        let ent = self
+            .conn
+            .query_row(
+                r#"SELECT e.url, e.nome, e.tipo_entidad, COALESCE(e.uri,''),
+                          COALESCE(e.cif,''), COALESCE(e.domicilio,''),
+                          COALESCE(e.cod_postal,''), COALESCE(e.municipio,''),
+                          COALESCE(e.provincia,'')
+                   FROM adxudicatario_match m
+                   JOIN datoscif_entidade e ON e.url = m.datoscif_url
+                   WHERE m.adx_key = ?1"#,
+                params![key],
+                |row| {
+                    Ok(DatosCifEntidade {
+                        url: row.get(0)?,
+                        nome: row.get(1)?,
+                        tipo_entidad: row.get(2)?,
+                        uri: row.get(3)?,
+                        cif: row.get(4)?,
+                        domicilio: row.get(5)?,
+                        cod_postal: row.get(6)?,
+                        municipio: row.get(7)?,
+                        provincia: row.get(8)?,
+                    })
+                },
+            )
+            .ok();
+        Ok(ent)
+    }
+
+    /// Cargos dunha empresa (activos primeiro), co nome da persoa vía JOIN.
+    pub fn cargos_de_empresa(&self, empresa_url: &str) -> Result<Vec<CargoRow>> {
+        let mut stmt = self.conn.prepare(
+            r#"SELECT c.persona_url, COALESCE(e.nome,''), COALESCE(c.cargo,''),
+                      COALESCE(c.desde,''), COALESCE(c.hasta,''), COALESCE(c.activo,0)
+               FROM datoscif_cargo c
+               LEFT JOIN datoscif_entidade e ON e.url = c.persona_url
+               WHERE c.empresa_url = ?1
+               ORDER BY c.activo DESC, e.nome COLLATE NOCASE"#,
+        )?;
+        let rows = stmt.query_map(params![empresa_url], |row| {
+            Ok(CargoRow {
+                persona_url: row.get(0)?,
+                persona_nome: row.get(1)?,
+                cargo: row.get(2)?,
+                desde: row.get(3)?,
+                hasta: row.get(4)?,
+                activo: row.get::<_, i64>(5)? != 0,
+            })
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    /// Persoas que teñen cargo en ≥2 razóns sociais distintas que ademais
+    /// aparecen como adxudicatarias nos contratos. É o cerne da detección de
+    /// "a mesma man detrás de varias empresas".
+    pub fn relacions_compartidas(&self) -> Result<Vec<PersoaRelacion>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            WITH empresa_contratos AS (
+                SELECT m.datoscif_url AS empresa_url,
+                       COUNT(DISTINCT r.contract_id) AS num_contratos
+                FROM adxudicatario_match m
+                JOIN contract_resolucion r ON cokey(r.adxudicatario) = m.adx_key
+                WHERE m.datoscif_url IS NOT NULL
+                GROUP BY m.datoscif_url
+            ),
+            persoa_empresas AS (
+                SELECT c.persona_url, c.empresa_url, MIN(c.cargo) AS cargo
+                FROM datoscif_cargo c
+                JOIN empresa_contratos ec ON ec.empresa_url = c.empresa_url
+                GROUP BY c.persona_url, c.empresa_url
+            ),
+            persoas_multi AS (
+                SELECT persona_url FROM persoa_empresas
+                GROUP BY persona_url HAVING COUNT(DISTINCT empresa_url) >= 2
+            )
+            SELECT pe.persona_url, COALESCE(per.nome,''),
+                   pe.empresa_url, COALESCE(emp.nome,''), COALESCE(emp.provincia,''),
+                   COALESCE(pe.cargo,''), ec.num_contratos
+            FROM persoa_empresas pe
+            JOIN persoas_multi pm ON pm.persona_url = pe.persona_url
+            JOIN empresa_contratos ec ON ec.empresa_url = pe.empresa_url
+            LEFT JOIN datoscif_entidade per ON per.url = pe.persona_url
+            LEFT JOIN datoscif_entidade emp ON emp.url = pe.empresa_url
+            ORDER BY per.nome COLLATE NOCASE, pe.persona_url, emp.nome COLLATE NOCASE
+            "#,
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                EmpresaRelacionada {
+                    empresa_url: row.get(2)?,
+                    empresa_nome: row.get(3)?,
+                    provincia: row.get(4)?,
+                    cargo: row.get(5)?,
+                    num_contratos: row.get(6)?,
+                },
+            ))
+        })?;
+
+        // Agrupar as filas por persoa.
+        let mut out: Vec<PersoaRelacion> = Vec::new();
+        for r in rows {
+            let (purl, pnome, emp) = r?;
+            match out.last_mut() {
+                Some(last) if last.persona_url == purl => last.empresas.push(emp),
+                _ => out.push(PersoaRelacion {
+                    persona_url: purl,
+                    persona_nome: pnome,
+                    empresas: vec![emp],
+                }),
+            }
+        }
+        Ok(out)
+    }
 }
 
 #[cfg(test)]
@@ -676,6 +985,118 @@ mod tests {
         let filtradas = db.query_local(&f).expect("query estado");
         assert_eq!(filtradas.len(), 1);
         assert_eq!(filtradas[0].id, "2");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    // Regresión: gardar cargos dunha empresa que aínda non está en
+    // `datoscif_entidade` non debe violar a FK (créase a fila pai soa).
+    #[test]
+    fn upsert_cargos_crea_empresa_se_non_existe() {
+        use crate::model::CargoRow;
+        let path = std::env::temp_dir().join("congal_test_fk_cargos.sqlite");
+        let _ = std::fs::remove_file(&path);
+        let mut db = Db::open(&path).expect("db");
+
+        // Sen ter inserido a empresa antes: non debe fallar a FK.
+        db.upsert_cargos(
+            "academia-lorca-institute-sl",
+            &[CargoRow {
+                persona_url: "garcia-lorca-federico".into(),
+                persona_nome: "Garcia Lorca Federico".into(),
+                cargo: "Administrador Único".into(),
+                activo: true,
+                ..Default::default()
+            }],
+            "agora",
+        )
+        .expect("upsert_cargos non debe violar a FK");
+
+        let cargos = db
+            .cargos_de_empresa("academia-lorca-institute-sl")
+            .expect("cargos");
+        assert_eq!(cargos.len(), 1);
+        assert_eq!(cargos[0].persona_nome, "Garcia Lorca Federico");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    // Dúas razóns sociais distintas, ambas adxudicatarias en contratos e ambas
+    // co mesmo administrador (persona_url): debe detectarse a relación.
+    #[test]
+    fn detecta_persoa_con_varias_razons_sociais() {
+        use crate::model::{CargoRow, DatosCifEntidade};
+        let path = std::env::temp_dir().join("congal_test_relacions.sqlite");
+        let _ = std::fs::remove_file(&path);
+        let mut db = Db::open(&path).expect("db");
+
+        // Dous contratos, cada un cun adxudicatario distinto.
+        db.upsert_summaries(
+            &[
+                summary("1", "obra", "Concello", "Formalizado", "01/02/2025"),
+                summary("2", "servizo", "Concello", "Formalizado", "03/04/2025"),
+            ],
+            "agora",
+        )
+        .expect("summaries");
+        db.upsert_detail(
+            &ContractDetail { contract_id: "1".into(), ..Default::default() },
+            &[Resolucion { adxudicatario: "Empresa A, S.L.".into(), ..Default::default() }],
+        )
+        .expect("detail 1");
+        db.upsert_detail(
+            &ContractDetail { contract_id: "2".into(), ..Default::default() },
+            &[Resolucion { adxudicatario: "EMPRESA B SL".into(), ..Default::default() }],
+        )
+        .expect("detail 2");
+
+        // Entidades de datoscif e vínculos (alta confianza).
+        for (url, nome, adx) in [
+            ("empresa-a-sl", "EMPRESA A SL", "Empresa A, S.L."),
+            ("empresa-b-sl", "EMPRESA B SL", "EMPRESA B SL"),
+        ] {
+            db.upsert_datoscif_entidade(
+                &DatosCifEntidade {
+                    url: url.into(),
+                    nome: nome.into(),
+                    tipo_entidad: 1,
+                    uri: format!("/empresa/{url}"),
+                    municipio: "Santiago".into(),
+                    provincia: "A Coruña".into(),
+                    ..Default::default()
+                },
+                true,
+                "agora",
+            )
+            .expect("entidade");
+            db.upsert_match(adx, Some(url), "exacta", "auto", "agora").expect("match");
+            // A mesma persoa administra ambas empresas.
+            db.upsert_cargos(
+                url,
+                &[CargoRow {
+                    persona_url: "perez-perez-xan".into(),
+                    persona_nome: "Perez Perez Xan".into(),
+                    cargo: "Administrador Único".into(),
+                    activo: true,
+                    ..Default::default()
+                }],
+                "agora",
+            )
+            .expect("cargos");
+        }
+
+        let rel = db.relacions_compartidas().expect("relacions");
+        assert_eq!(rel.len(), 1, "debe haber unha persoa relacionada");
+        assert_eq!(rel[0].persona_url, "perez-perez-xan");
+        assert_eq!(rel[0].empresas.len(), 2, "controla dúas razóns sociais");
+        assert!(rel[0].empresas.iter().all(|e| e.num_contratos == 1));
+
+        // E a entidade recupérase desde o nome do adxudicatario (insensible a puntuación).
+        let ent = db
+            .entidade_de_adxudicatario("Empresa A SL")
+            .expect("query")
+            .expect("debe atoparse");
+        assert_eq!(ent.url, "empresa-a-sl");
 
         let _ = std::fs::remove_file(&path);
     }

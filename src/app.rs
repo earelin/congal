@@ -3,8 +3,10 @@
 
 use crate::db::{Db, DbStats, LocalOptions};
 use crate::model::{
-    ContractDetail, EstadoGroup, FilterOptions, Filters, LocalFilters, LocalRow, Resolucion,
+    CargoRow, ContractDetail, DatosCifEntidade, EstadoGroup, FilterOptions, Filters, LocalFilters,
+    LocalRow, PersoaRelacion, Resolucion,
 };
+use crate::scraper::DATOSCIF_BASE;
 use crate::theme;
 use crate::worker::{Command, Event, Worker};
 use egui::{Align, Color32, Layout, RichText, ScrollArea};
@@ -29,6 +31,8 @@ pub struct App {
 
     busy: bool,
     progress: Option<(usize, usize)>,
+    /// Título do modal de progreso segundo a operación en curso.
+    progress_titulo: &'static str,
     status: String,
     logs: Vec<String>,
     stats: DbStats,
@@ -43,6 +47,20 @@ pub struct App {
     selected_row: Option<LocalRow>,
     /// Detalle descargado do contrato seleccionado, se o hai.
     selected_detail: Option<(ContractDetail, Vec<Resolucion>)>,
+    /// Info de datoscif (entidade + cargos) por adxudicatario do contrato aberto.
+    selected_datoscif: Vec<AdxDatosCif>,
+
+    /// Vista de relacións entre razóns sociais (mesma persoa, varias empresas).
+    show_relacions: bool,
+    relacions: Vec<PersoaRelacion>,
+    relacions_loaded: bool,
+}
+
+/// Datos de datoscif asociados a un adxudicatario dun contrato.
+struct AdxDatosCif {
+    adx_nome: String,
+    entidade: DatosCifEntidade,
+    cargos: Vec<CargoRow>,
 }
 
 impl App {
@@ -71,6 +89,7 @@ impl App {
             show_progress_dialog: false,
             busy: false,
             progress: None,
+            progress_titulo: "Progreso",
             status: "Listo.".to_string(),
             logs: Vec::new(),
             stats,
@@ -81,6 +100,10 @@ impl App {
             selected: None,
             selected_row: None,
             selected_detail: None,
+            selected_datoscif: Vec::new(),
+            show_relacions: false,
+            relacions: Vec::new(),
+            relacions_loaded: false,
         };
         app.refresh_local();
         app
@@ -108,6 +131,21 @@ impl App {
                     self.stats = self.db.stats().unwrap_or_default();
                     self.local_options = self.db.local_options().unwrap_or_default();
                     self.need_query = true;
+                }
+                Event::EnrichDone(r) => {
+                    self.busy = false;
+                    self.progress = None;
+                    self.status = format!(
+                        "Vinculación rematada · {} procesados · {} vinculados · {} sen match · {} empresas con cargos · {} cargos · {} erros",
+                        r.procesados, r.vinculados, r.sen_match, r.empresas_con_cargos, r.cargos, r.erros
+                    );
+                    // Os vínculos cambiaron: invalidar a vista de relacións e o
+                    // detalle aberto, e refrescar a táboa.
+                    self.relacions_loaded = false;
+                    self.need_query = true;
+                    if let Some(row) = self.selected_row.clone() {
+                        self.select_contract(row);
+                    }
                 }
                 Event::Exported(path, n) => {
                     self.busy = false;
@@ -140,14 +178,49 @@ impl App {
 
     fn select_contract(&mut self, row: LocalRow) {
         self.selected_detail = self.db.load_detail(&row.id).ok().flatten();
+        self.selected_datoscif = self.build_datoscif_info();
         self.selected = Some(row.id.clone());
         self.selected_row = Some(row);
+    }
+
+    /// Reúne, para cada adxudicatario distinto do contrato aberto, a entidade de
+    /// datoscif vinculada (se a hai) e os seus cargos (só empresas).
+    fn build_datoscif_info(&self) -> Vec<AdxDatosCif> {
+        let mut out = Vec::new();
+        let mut vistos = std::collections::HashSet::new();
+        if let Some((_, resolucions)) = &self.selected_detail {
+            for r in resolucions {
+                let adx = r.adxudicatario.trim();
+                if adx.is_empty() || !vistos.insert(adx.to_string()) {
+                    continue;
+                }
+                if let Ok(Some(ent)) = self.db.entidade_de_adxudicatario(adx) {
+                    let cargos = if ent.is_empresa() {
+                        self.db.cargos_de_empresa(&ent.url).unwrap_or_default()
+                    } else {
+                        Vec::new()
+                    };
+                    out.push(AdxDatosCif {
+                        adx_nome: adx.to_string(),
+                        entidade: ent,
+                        cargos,
+                    });
+                }
+            }
+        }
+        out
     }
 
     fn close_detail(&mut self) {
         self.selected = None;
         self.selected_row = None;
         self.selected_detail = None;
+        self.selected_datoscif.clear();
+    }
+
+    fn refresh_relacions(&mut self) {
+        self.relacions = self.db.relacions_compartidas().unwrap_or_default();
+        self.relacions_loaded = true;
     }
 }
 
@@ -197,6 +270,15 @@ impl App {
                     );
                     if importar.clicked() {
                         self.show_import_dialog = true;
+                    }
+
+                    ui.add_space(8.0);
+                    let rel = ui.selectable_label(self.show_relacions, "🔗 Relacións");
+                    if rel.clicked() {
+                        self.show_relacions = !self.show_relacions;
+                        if self.show_relacions && !self.relacions_loaded {
+                            self.refresh_relacions();
+                        }
                     }
 
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -302,6 +384,7 @@ impl App {
                 if importar.clicked() {
                     self.busy = true;
                     self.progress = None;
+                    self.progress_titulo = "Importación de contratos";
                     self.logs.clear();
                     self.status = "Iniciando importación…".into();
                     self.worker.send(Command::Sync(self.filters.clone()));
@@ -328,7 +411,7 @@ impl App {
     fn progress_dialog(&mut self, ctx: &egui::Context) {
         let modal = egui::Modal::new(egui::Id::new("progress_dialog")).show(ctx, |ui| {
             ui.set_width(440.0);
-            ui.heading("Importación de datos");
+            ui.heading(self.progress_titulo);
             ui.add_space(10.0);
 
             if self.busy {
@@ -481,10 +564,37 @@ impl App {
                         .small()
                         .color(Color32::GRAY),
                 );
+
+                ui.add_space(10.0);
+                ui.separator();
+                ui.label(RichText::new("Empresas").strong());
+                let vincular = ui.add_enabled(
+                    !self.busy,
+                    egui::Button::new("Vincular con datoscif"),
+                );
+                if vincular.clicked() {
+                    self.busy = true;
+                    self.progress = None;
+                    self.progress_titulo = "Vinculación con datoscif (relacións)";
+                    self.logs.clear();
+                    self.status = "Iniciando vinculación con datoscif…".into();
+                    self.worker.send(Command::Enrich);
+                    self.show_progress_dialog = true;
+                }
+                ui.label(
+                    RichText::new(
+                        "Busca cada adxudicatario en datoscif.es e garda os seus \
+                         administradores e apoderados.",
+                    )
+                    .small()
+                    .color(Color32::GRAY),
+                );
             });
 
         egui::CentralPanel::default().show_inside(ui, |ui| {
-            if self.selected.is_some() {
+            if self.show_relacions {
+                self.relacions_view(ui);
+            } else if self.selected.is_some() {
                 self.detail_view(ui);
             } else {
                 self.results_table(ui);
@@ -664,6 +774,165 @@ impl App {
                         ui.collapsing("Outros campos", |ui| {
                             for (k, v) in &d.extra {
                                 kv(ui, k, v);
+                            }
+                        });
+                    }
+                }
+            }
+
+            // Información de datoscif: quen está detrás de cada adxudicatario.
+            render_datoscif(ui, &self.selected_datoscif);
+        });
+    }
+
+    /// Vista de relacións: persoas que controlan varias razóns sociais que
+    /// aparecen como adxudicatarias nos contratos.
+    fn relacions_view(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            ui.heading("Relacións entre razóns sociais");
+            ui.add_space(8.0);
+            if ui.button("↻ Actualizar").clicked() {
+                self.refresh_relacions();
+            }
+        });
+        ui.label(
+            RichText::new(
+                "Persoas (administradores/apoderados) cun cargo en dúas ou máis empresas \
+                 distintas que aparecen como adxudicatarias nos teus contratos.",
+            )
+            .small()
+            .color(Color32::GRAY),
+        );
+        ui.add_space(6.0);
+        ui.separator();
+        ui.add_space(6.0);
+
+        if !self.relacions_loaded {
+            self.refresh_relacions();
+        }
+        if self.relacions.is_empty() {
+            ui.add_space(10.0);
+            ui.label(
+                RichText::new(
+                    "Aínda non se atoparon relacións. Vincula primeiro os adxudicatarios \
+                     con datoscif (botón «Vincular con datoscif»).",
+                )
+                .italics()
+                .color(Color32::GRAY),
+            );
+            return;
+        }
+
+        ScrollArea::vertical().show(ui, |ui| {
+            for p in &self.relacions {
+                ui.add_space(6.0);
+                ui.group(|ui| {
+                    ui.set_width(ui.available_width());
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(&p.persona_nome).strong().size(15.0));
+                        ui.hyperlink_to(
+                            "↗ datoscif",
+                            format!("{DATOSCIF_BASE}/directivo/{}", p.persona_url),
+                        );
+                    });
+                    ui.label(
+                        RichText::new(format!("controla {} razóns sociais", p.empresas.len()))
+                            .small()
+                            .color(Color32::GRAY),
+                    );
+                    ui.add_space(4.0);
+                    for e in &p.empresas {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label("•");
+                            ui.hyperlink_to(
+                                RichText::new(&e.empresa_nome).strong(),
+                                format!("{DATOSCIF_BASE}/empresa/{}", e.empresa_url),
+                            );
+                            if !e.cargo.is_empty() {
+                                ui.label(RichText::new(format!("({})", e.cargo)).small());
+                            }
+                            let mut extra = format!("· {} contratos", e.num_contratos);
+                            if !e.provincia.is_empty() {
+                                extra = format!("· {} {}", e.provincia, extra);
+                            }
+                            ui.label(RichText::new(extra).small().color(Color32::GRAY));
+                        });
+                    }
+                });
+            }
+        });
+    }
+}
+
+/// Renderiza, na vista de detalle, a entidade de datoscif e os seus cargos para
+/// cada adxudicatario do contrato.
+fn render_datoscif(ui: &mut egui::Ui, info: &[AdxDatosCif]) {
+    if info.is_empty() {
+        return;
+    }
+    ui.add_space(12.0);
+    ui.separator();
+    ui.add_space(6.0);
+    ui.label(RichText::new("Quen está detrás (datoscif)").strong());
+    for a in info {
+        ui.add_space(6.0);
+        ui.group(|ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new(&a.entidade.nome).strong());
+                let ruta = if a.entidade.is_empresa() {
+                    "empresa"
+                } else {
+                    "directivo"
+                };
+                ui.hyperlink_to(
+                    "↗ datoscif",
+                    format!("{DATOSCIF_BASE}/{ruta}/{}", a.entidade.url),
+                );
+            });
+            if a.adx_nome != a.entidade.nome {
+                ui.label(
+                    RichText::new(format!("adxudicatario: {}", a.adx_nome))
+                        .small()
+                        .color(Color32::GRAY),
+                );
+            }
+            // Datos da persoa xurídica (CIF, localización).
+            let e = &a.entidade;
+            if !e.cif.is_empty() {
+                ui.label(RichText::new(format!("CIF: {}", e.cif)).small());
+            }
+            let lugar = match (e.municipio.is_empty(), e.provincia.is_empty()) {
+                (false, false) => format!("{} ({})", e.municipio, e.provincia),
+                (false, true) => e.municipio.clone(),
+                (true, false) => e.provincia.clone(),
+                (true, true) => String::new(),
+            };
+            if !lugar.is_empty() {
+                let mut txt = lugar;
+                if !e.domicilio.is_empty() {
+                    txt = format!("{} · {}", e.domicilio, txt);
+                }
+                ui.label(RichText::new(txt).small().color(Color32::GRAY));
+            }
+            if a.entidade.is_empresa() {
+                if a.cargos.is_empty() {
+                    ui.label(
+                        RichText::new("Sen cargos rexistrados.")
+                            .small()
+                            .italics()
+                            .color(Color32::GRAY),
+                    );
+                } else {
+                    ui.add_space(4.0);
+                    for c in &a.cargos {
+                        ui.horizontal_wrapped(|ui| {
+                            let punto = if c.activo { "●" } else { "○" };
+                            ui.label(RichText::new(punto).small());
+                            ui.label(RichText::new(&c.persona_nome).strong().small());
+                            if !c.cargo.is_empty() {
+                                ui.label(RichText::new(format!("— {}", c.cargo)).small());
                             }
                         });
                     }
