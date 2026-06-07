@@ -4,7 +4,7 @@
 use crate::db::{Db, DbStats, LocalOptions};
 use crate::model::{
     CargoRow, ContractDetail, DatosCifEntidade, EstadoGroup, FilterOptions, Filters, LocalFilters,
-    GrupoRelacion, LocalRow, Resolucion,
+    GrupoRelacion, LocalRow, Resolucion, format_importe,
 };
 use crate::scraper::DATOSCIF_BASE;
 use crate::theme;
@@ -273,7 +273,7 @@ impl App {
                         egui::Button::new(theme::icon_label(
                             ui,
                             theme::icons::ARROW_BIG_DOWN,
-                            "Importar datos",
+                            "Importar contratos",
                             Color32::WHITE,
                         ))
                         .fill(theme::accent(self.dark)),
@@ -574,7 +574,7 @@ impl App {
                 ui.label(RichText::new("Empresas").strong());
                 let vincular = ui.add_enabled(
                     !self.busy,
-                    egui::Button::new("Vincular con datoscif"),
+                    egui::Button::new("Importar relacións"),
                 );
                 if vincular.clicked() {
                     self.busy = true;
@@ -845,6 +845,9 @@ impl App {
             return;
         }
 
+        // Id do contrato premido nun despregable; trátase tras a ScrollArea
+        // (fóra do préstamo inmutable de `self.relacions`) para saltar á súa ficha.
+        let mut jump: Option<String> = None;
         ScrollArea::vertical().show(ui, |ui| {
             for g in &self.relacions {
                 ui.add_space(6.0);
@@ -881,9 +884,73 @@ impl App {
                             ui.label(RichText::new(extra).small().color(Color32::GRAY));
                         });
                     }
+
+                    // Despregable cos contratos adxudicados ás empresas do grupo,
+                    // coa suma dos importes no encabezado.
+                    if !g.contratos.is_empty() {
+                        ui.add_space(6.0);
+                        let titulo = format!(
+                            "Contratos adxudicados ({}) · {} en total",
+                            g.contratos.len(),
+                            format_importe(g.importe_total),
+                        );
+                        let id = egui::Id::new(("contratos_grupo", &g.empresas[0].empresa_url));
+                        egui::CollapsingHeader::new(RichText::new(titulo).strong())
+                            .id_salt(id)
+                            .show(ui, |ui| {
+                                // As celas non capturan o clic: así o cursor non entra
+                                // en modo selección e o clic chega á fila enteira.
+                                ui.style_mut().interaction.selectable_labels = false;
+                                for c in &g.contratos {
+                                    let resp = ui
+                                        .horizontal_wrapped(|ui| {
+                                            ui.label(
+                                                RichText::new(format!("#{}", c.contract_id))
+                                                    .small()
+                                                    .monospace()
+                                                    .color(Color32::GRAY),
+                                            );
+                                            ui.label(
+                                                RichText::new(&c.publicacion)
+                                                    .small()
+                                                    .monospace()
+                                                    .color(Color32::GRAY),
+                                            );
+                                            ui.label(RichText::new(&c.importe_txt).small().strong());
+                                            ui.label(
+                                                RichText::new(format!("· {}", c.empresa_nome))
+                                                    .small()
+                                                    .color(Color32::GRAY),
+                                            );
+                                            if !c.asunto.is_empty() {
+                                                ui.label(
+                                                    RichText::new(format!("— {}", c.asunto)).small(),
+                                                );
+                                            }
+                                        })
+                                        .response
+                                        .interact(egui::Sense::click());
+                                    if resp.hovered() {
+                                        resp.clone().on_hover_cursor(egui::CursorIcon::PointingHand);
+                                    }
+                                    if resp.clicked() {
+                                        jump = Some(c.contract_id.clone());
+                                    }
+                                }
+                            });
+                    }
                 });
             }
         });
+
+        // Saltar á ficha do contrato premido: selecciónase e cámbiase á pestana
+        // Contratos, que pasará a amosar a vista de detalle no seguinte fotograma.
+        if let Some(id) = jump {
+            if let Some(row) = self.rows.iter().find(|r| r.id == id).cloned() {
+                self.select_contract(row);
+                self.tab = Tab::Contratos;
+            }
+        }
     }
 }
 

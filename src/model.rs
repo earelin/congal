@@ -336,6 +336,20 @@ pub struct PersoaNodo {
     pub num_empresas: usize,
 }
 
+/// Un contrato adxudicado a unha das razóns sociais dun grupo. Úsase no
+/// despregable de contratos de cada trama na vista de relacións.
+#[derive(Debug, Clone)]
+pub struct ContratoAdxudicado {
+    pub contract_id: String,
+    /// Razón social do grupo á que se lle adxudicou este contrato.
+    pub empresa_nome: String,
+    pub asunto: String,
+    /// Data de publicación formatada como DD/MM/YYYY.
+    pub publicacion: String,
+    pub importe_num: f64,
+    pub importe_txt: String,
+}
+
 /// Un grupo (trama) de razóns sociais interconectadas: unha compoñente conexa
 /// do grafo persoa↔empresa, onde as persoas comparten cargo en varias das
 /// empresas adxudicatarias. Substitúe a vista de «unha persoa por tarxeta»,
@@ -344,6 +358,11 @@ pub struct PersoaNodo {
 pub struct GrupoRelacion {
     pub persoas: Vec<PersoaNodo>,
     pub empresas: Vec<EmpresaNodo>,
+    /// Contratos nos que as razóns sociais do grupo son adxudicatarias,
+    /// ordenados por data descendente. Limitados polos filtros do panel.
+    pub contratos: Vec<ContratoAdxudicado>,
+    /// Suma dos importes de adxudicación de `contratos`.
+    pub importe_total: f64,
 }
 
 /// Nivel de confianza do emparellamento adxudicatario ↔ entidade de datoscif.

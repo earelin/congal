@@ -1,9 +1,9 @@
 //! Persistencia en SQLite (rusqlite, bundled).
 
 use crate::model::{
-    CargoRow, ContractDetail, ContractSummary, DatosCifEntidade, EmpresaNodo, GrupoRelacion,
-    LocalFilters, LocalRow, PersoaNodo, Resolucion, company_key, format_data_gl, format_importe,
-    normalize_search, parse_data, parse_importe,
+    CargoRow, ContractDetail, ContractSummary, ContratoAdxudicado, DatosCifEntidade, EmpresaNodo,
+    GrupoRelacion, LocalFilters, LocalRow, PersoaNodo, Resolucion, company_key, format_data_gl,
+    format_importe, normalize_search, parse_data, parse_importe,
 };
 use anyhow::Result;
 use rusqlite::functions::FunctionFlags;
@@ -896,6 +896,7 @@ impl Db {
         struct Build {
             persoas: HashMap<String, PersoaNodo>,
             empresas: HashMap<String, EmpresaNodo>,
+            contratos: Vec<ContratoAdxudicado>,
         }
         let mut grupos: HashMap<usize, Build> = HashMap::new();
         for a in &arestas {
@@ -919,6 +920,57 @@ impl Db {
                 });
         }
 
+        // Contratos adxudicados ás razóns sociais dos grupos. Cada fila é a
+        // adxudicación dun contrato a unha empresa (importe sumado entre lotes da
+        // mesma empresa), e repártese ao grupo da súa empresa. Reusa os mesmos
+        // `filtros` que delimitan as empresas, e ordénase por data descendente.
+        let contratos_sql = format!(
+            r#"
+            SELECT m.datoscif_url AS empresa_url,
+                   r.contract_id,
+                   COALESCE(emp.nome,'') AS empresa_nome,
+                   COALESCE(c.asunto,'') AS asunto,
+                   COALESCE(c.data_publicacion,'') AS data_publicacion,
+                   SUM(r.importe_resolucion_num) AS importe
+            FROM adxudicatario_match m
+            JOIN contract_resolucion r ON cokey(r.adxudicatario) = m.adx_key
+            JOIN contracts c ON c.id = r.contract_id
+            LEFT JOIN datoscif_entidade emp ON emp.url = m.datoscif_url
+            WHERE m.datoscif_url IS NOT NULL
+              AND r.contract_id IN (
+                  SELECT c.id FROM contracts c
+                  LEFT JOIN organismos o ON o.cod_organismo = c.cod_organismo
+                  LEFT JOIN estados e ON e.cod_estado = c.cod_estado
+                  WHERE 1=1{where_sql}
+              )
+            GROUP BY m.datoscif_url, r.contract_id
+            ORDER BY c.data_publicacion DESC, r.contract_id DESC
+            "#
+        );
+        let mut stmt = self.conn.prepare(&contratos_sql)?;
+        let params_dyn: Vec<&dyn rusqlite::ToSql> =
+            args.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+        let mut filas = stmt.query(params_dyn.as_slice())?;
+        while let Some(row) = filas.next()? {
+            let empresa_url: String = row.get(0)?;
+            // Só nos interesan as empresas que forman parte dalgún grupo.
+            let Some(&node) = idx.get(&format!("E:{empresa_url}")) else {
+                continue;
+            };
+            let root = find(&mut parent, node);
+            let Some(b) = grupos.get_mut(&root) else { continue };
+            let importe_num: f64 = row.get::<_, Option<f64>>(5)?.unwrap_or(0.0);
+            let data_iso: String = row.get(4)?;
+            b.contratos.push(ContratoAdxudicado {
+                contract_id: row.get(1)?,
+                empresa_nome: row.get(2)?,
+                asunto: row.get(3)?,
+                publicacion: format_data_gl(&data_iso),
+                importe_num,
+                importe_txt: format_importe(importe_num),
+            });
+        }
+
         // Materializar e ordenar: dentro de cada grupo por nome; os grupos por
         // número de razóns sociais (e logo de contratos) en orde descendente.
         let mut out: Vec<GrupoRelacion> = grupos
@@ -928,7 +980,8 @@ impl Db {
                 persoas.sort_by(|a, b| a.persona_nome.to_lowercase().cmp(&b.persona_nome.to_lowercase()));
                 let mut empresas: Vec<EmpresaNodo> = b.empresas.into_values().collect();
                 empresas.sort_by(|a, b| a.empresa_nome.to_lowercase().cmp(&b.empresa_nome.to_lowercase()));
-                GrupoRelacion { persoas, empresas }
+                let importe_total = b.contratos.iter().map(|c| c.importe_num).sum();
+                GrupoRelacion { persoas, empresas, contratos: b.contratos, importe_total }
             })
             .collect();
         out.sort_by(|a, b| {
@@ -1145,12 +1198,20 @@ mod tests {
         .expect("summaries");
         db.upsert_detail(
             &ContractDetail { contract_id: "1".into(), ..Default::default() },
-            &[Resolucion { adxudicatario: "Empresa A, S.L.".into(), ..Default::default() }],
+            &[Resolucion {
+                adxudicatario: "Empresa A, S.L.".into(),
+                importe_num: Some(1000.0),
+                ..Default::default()
+            }],
         )
         .expect("detail 1");
         db.upsert_detail(
             &ContractDetail { contract_id: "2".into(), ..Default::default() },
-            &[Resolucion { adxudicatario: "EMPRESA B SL".into(), ..Default::default() }],
+            &[Resolucion {
+                adxudicatario: "EMPRESA B SL".into(),
+                importe_num: Some(2500.5),
+                ..Default::default()
+            }],
         )
         .expect("detail 2");
 
@@ -1196,6 +1257,12 @@ mod tests {
         assert_eq!(rel[0].persoas[0].num_empresas, 2, "controla dúas razóns sociais");
         assert_eq!(rel[0].empresas.len(), 2, "dúas razóns sociais no grupo");
         assert!(rel[0].empresas.iter().all(|e| e.num_contratos == 1));
+        // O despregable de contratos do grupo reúne ambas adxudicacións e suma os importes.
+        assert_eq!(rel[0].contratos.len(), 2, "os dous contratos do grupo");
+        assert_eq!(rel[0].importe_total, 3500.5, "suma dos importes adxudicados");
+        let ids: std::collections::HashSet<&str> =
+            rel[0].contratos.iter().map(|c| c.contract_id.as_str()).collect();
+        assert_eq!(ids, std::collections::HashSet::from(["1", "2"]));
 
         // E a entidade recupérase desde o nome do adxudicatario (insensible a puntuación).
         let ent = db
