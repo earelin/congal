@@ -8,7 +8,9 @@ anyhow = "1.0.102"
 chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 dark-light = "2.0.0"
 directories = "6.0.0"
-eframe = "0.34.3"
+# `persistence` activa o gardado da posición/tamaño da ventá (e o seu restaurado
+# ao abrir). Sen esta característica, eframe non persiste a xeometría da ventá.
+eframe = { version = "0.34.3", features = ["persistence"] }
 egui = "0.34.3"
 egui_extras = "0.34.3"
 encoding_rs = "0.8.35"

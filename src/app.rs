@@ -291,6 +291,14 @@ impl eframe::App for App {
         self.worker.shutdown();
         self.db.checkpoint();
     }
+
+    /// Só queremos persistir a posición e o tamaño da ventá (a través da
+    /// característica `persistence` de eframe e `persist_window`, activa por
+    /// defecto). Non persistimos o estado interno de egui para que a interface
+    /// arranque sempre limpa (combos pechados, scroll ao inicio, tema do sistema).
+    fn persist_egui_memory(&self) -> bool {
+        false
+    }
 }
 
 impl App {
