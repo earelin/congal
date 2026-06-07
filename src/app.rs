@@ -859,12 +859,25 @@ impl App {
             .column(Column::remainder().at_least(150.0).clip(true).resizable(false))
             .column(Column::initial(120.0))
             .header(24.0, |mut h| {
-                for t in [
-                    "ID", "Data", "Obxecto", "Importe", "Estado", "Organismo",
-                    "Adxudicatario", "Imp. resolución",
+                // (título, aliñado á dereita) — ID e importes numéricos á dereita.
+                for (t, dereita) in [
+                    ("ID", true),
+                    ("Data", false),
+                    ("Obxecto", false),
+                    ("Importe", true),
+                    ("Estado", false),
+                    ("Organismo", false),
+                    ("Adxudicatario", false),
+                    ("Imp. resolución", true),
                 ] {
                     h.col(|ui| {
-                        ui.strong(t);
+                        if dereita {
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                ui.strong(t);
+                            });
+                        } else {
+                            ui.strong(t);
+                        }
                     });
                 }
             })
@@ -873,13 +886,16 @@ impl App {
                     let is_sel = selected.as_deref() == Some(r.id.as_str());
                     body.row(22.0, |mut row| {
                         row.set_selected(is_sel);
+                        // ID á dereita: así a icona de aviso non desaliña os números.
                         row.col(|ui| {
-                            if r.participante_unico {
-                                ui.label(RichText::new("⚠").color(aviso)).on_hover_text(
-                                    "Un só participante presentado (posible indicio de irregularidade)",
-                                );
-                            }
-                            ui.label(&r.id);
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                ui.label(&r.id);
+                                if r.participante_unico {
+                                    ui.label(RichText::new("⚠").color(aviso)).on_hover_text(
+                                        "Un só participante presentado (posible indicio de irregularidade)",
+                                    );
+                                }
+                            });
                         });
                         row.col(|ui| {
                             ui.label(&r.publicacion);
@@ -888,7 +904,9 @@ impl App {
                             ui.label(&r.asunto);
                         });
                         row.col(|ui| {
-                            ui.label(&r.importe_txt);
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                ui.label(&r.importe_txt);
+                            });
                         });
                         row.col(|ui| {
                             ui.label(&r.estado);
@@ -900,7 +918,9 @@ impl App {
                             ui.label(&r.adxudicatario);
                         });
                         row.col(|ui| {
-                            ui.label(&r.importe_resolucion_txt);
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                ui.label(&r.importe_resolucion_txt);
+                            });
                         });
                         let resp = row.response();
                         resp.clone().on_hover_cursor(egui::CursorIcon::PointingHand);
