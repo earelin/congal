@@ -838,6 +838,7 @@ impl App {
         // Orde actual (cópiase para usala dentro do peche da cabeceira sen tomar
         // prestado `self`); o clic recóllese e aplícase tras a táboa.
         let (cur_col, cur_asc) = (self.local.sort_col, self.local.sort_asc);
+        let accent = theme::accent(self.dark);
         let mut clicked_header: Option<SortColumn> = None;
         // Texto non seleccionable nas celas: así o cursor non entra en modo
         // inserción de texto e o clic chega á fila enteira (sense ::click).
@@ -863,11 +864,13 @@ impl App {
             .column(Column::remainder().at_least(150.0).clip(true).resizable(false))
             .column(Column::initial(120.0))
             .header(24.0, |mut h| {
-                // (título, columna de orde, aliñado á dereita). Premer ordena;
-                // volver premer inverte. A columna activa resáltase e leva frecha.
+                // (título, columna de orde, aliñado á dereita). Premer ordena; volver
+                // premer inverte. A columna activa marca cor de acento e frecha. Úsanse
+                // etiquetas clicables (non `selectable_label`) para que o fondo do hover
+                // non quede recortado polas columnas con `clip`.
                 for (t, col, dereita) in [
                     ("ID", SortColumn::Id, true),
-                    ("Data", SortColumn::Data, false),
+                    ("Data", SortColumn::Data, true),
                     ("Obxecto", SortColumn::Obxecto, false),
                     ("Importe", SortColumn::Importe, true),
                     ("Estado", SortColumn::Estado, false),
@@ -881,16 +884,19 @@ impl App {
                     } else {
                         t.to_string()
                     };
+                    let mut txt = RichText::new(etiqueta).strong();
+                    if activa {
+                        txt = txt.color(accent);
+                    }
                     h.col(|ui| {
+                        let lab = egui::Label::new(txt).sense(egui::Sense::click());
                         let resp = if dereita {
-                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                ui.selectable_label(activa, RichText::new(etiqueta).strong())
-                            })
-                            .inner
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| ui.add(lab))
+                                .inner
                         } else {
-                            ui.selectable_label(activa, RichText::new(etiqueta).strong())
+                            ui.add(lab)
                         };
-                        if resp.clicked() {
+                        if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
                             clicked_header = Some(col);
                         }
                     });
@@ -901,19 +907,27 @@ impl App {
                     let is_sel = selected.as_deref() == Some(r.id.as_str());
                     body.row(22.0, |mut row| {
                         row.set_selected(is_sel);
-                        // ID á dereita: así a icona de aviso non desaliña os números.
+                        // Icona de aviso á esquerda; ID á dereita (números aliñados).
                         row.col(|ui| {
-                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                ui.label(&r.id);
+                            ui.horizontal(|ui| {
                                 if r.participante_unico {
                                     ui.label(RichText::new("⚠").color(aviso)).on_hover_text(
                                         "Un só participante presentado (posible indicio de irregularidade)",
                                     );
                                 }
+                                ui.allocate_ui_with_layout(
+                                    egui::vec2(ui.available_width(), ui.available_height()),
+                                    Layout::right_to_left(Align::Center),
+                                    |ui| {
+                                        ui.label(&r.id);
+                                    },
+                                );
                             });
                         });
                         row.col(|ui| {
-                            ui.label(&r.publicacion);
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                ui.label(&r.publicacion);
+                            });
                         });
                         row.col(|ui| {
                             ui.label(&r.asunto);
