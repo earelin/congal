@@ -187,6 +187,17 @@ pub fn accent(dark: bool) -> Color32 {
     if dark { ACCENT_DARK } else { ACCENT_LIGHT }
 }
 
+/// Cor atenuada para as etiquetas dos pares «etiqueta + valor» (gris
+/// secundario estilo HIG). Distínguese así a etiqueta —simple guía— do valor,
+/// que conserva a cor de texto plena.
+pub fn label_muted(dark: bool) -> Color32 {
+    if dark {
+        Color32::from_rgb(142, 142, 147) // #8E8E93
+    } else {
+        Color32::from_rgb(110, 110, 115)
+    }
+}
+
 /// Iconas Lucide (codepoints da área de uso privado da fonte `lucide.ttf`).
 pub mod icons {
     /// `arrow-big-down`.

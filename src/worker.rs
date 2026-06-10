@@ -2,7 +2,7 @@
 
 use crate::db::Db;
 use crate::enrich::{self, EnrichMode, EnrichResult};
-use crate::model::{FilterOptions, Filters, LocalFilters, Suggestion};
+use crate::model::{FilterOptions, ImportParams, LocalFilters, Suggestion};
 use crate::scraper::{self, Client};
 use crate::sync::{self, SyncResult};
 use std::path::PathBuf;
@@ -14,7 +14,8 @@ use std::thread;
 /// Ordes que a interface envía ao fío traballador.
 pub enum Command {
     LoadOptions,
-    Sync(Filters),
+    /// Importa un organismo: licitacións (con detalle) e contratos menores do ano.
+    Import(ImportParams),
     /// Vincula os adxudicatarios con datoscif e descarga os cargos das empresas.
     /// O modo decide se só se procesan os novos ou se se reimportan todas.
     Enrich(EnrichMode),
@@ -107,14 +108,14 @@ impl Worker {
                                 tx_evt.send(Event::Error(format!("Erro cargando filtros: {e}")));
                         }
                     },
-                    Command::Sync(filters) => {
-                        match sync::run_sync(&client, &mut db, &filters, &tx_evt, &cancel_thread) {
+                    Command::Import(params) => {
+                        match sync::run_import(&client, &mut db, &params, &tx_evt, &cancel_thread) {
                             Ok(r) => {
                                 let _ = tx_evt.send(Event::SyncDone(r));
                             }
                             Err(e) => {
-                                let _ = tx_evt
-                                    .send(Event::Error(format!("Erro na sincronización: {e}")));
+                                let _ =
+                                    tx_evt.send(Event::Error(format!("Erro na importación: {e}")));
                             }
                         }
                     }

@@ -46,6 +46,16 @@ pub struct EnrichResult {
 /// Pausa de cortesía entre peticións a datoscif.
 const THROTTLE: Duration = Duration::from_millis(350);
 
+/// Erro que se devolve cando datoscif deixa de responder ou nos bloquea (502,
+/// timeouts…): detense o proceso con limpeza en lugar de seguir martelando.
+fn erro_datoscif_bloqueado(client: &Client) -> anyhow::Error {
+    anyhow::anyhow!(
+        "datoscif está a bloquear as peticións (probablemente pola IP): {} fallos \
+         seguidos. Detívose o proceso; agarda un tempo antes de volver tentalo.",
+        client.fallos_datoscif()
+    )
+}
+
 pub fn run_enrich(
     client: &Client,
     db: &mut Db,
@@ -178,6 +188,8 @@ fn reimport_empresas(
         msg: "Buscando empresas vinculadas…".into(),
     });
 
+    client.reset_datoscif();
+
     let empresas = db.empresas_vinculadas()?;
     let total = empresas.len();
     let mut result = EnrichResult {
@@ -196,6 +208,9 @@ fn reimport_empresas(
         if cancel.load(Ordering::Relaxed) {
             let _ = tx.send(Event::Log("Reimportación cancelada.".into()));
             break;
+        }
+        if client.datoscif_bloqueado() {
+            return Err(erro_datoscif_bloqueado(client));
         }
         let nome = ent.nome.clone();
         std::thread::sleep(THROTTLE);
@@ -395,6 +410,9 @@ fn enrich_novos(
         msg: "Buscando adxudicatarios sen vincular…".into(),
     });
 
+    // Contador de bloqueo limpo: este proceso parte de cero.
+    client.reset_datoscif();
+
     let pendentes = db.adxudicatarios_pendentes()?;
     let total = pendentes.len();
     let mut result = EnrichResult::default();
@@ -416,6 +434,7 @@ fn enrich_novos(
         let nif = db.nif_de_adxudicatario(adx)?;
         let mut suggestions: Vec<Suggestion> = Vec::new();
         let mut seen = HashSet::new();
+        let fallos_antes = client.fallos_datoscif();
         let decision = decide_match(
             client,
             tx,
@@ -426,56 +445,71 @@ fn enrich_novos(
             &mut seen,
         );
 
-        match decision {
-            Decision::Auto(url, conf) => {
-                let sug = suggestions
-                    .iter()
-                    .find(|s| s.url == url)
-                    .expect("o url vén das suxestións");
-                let mut ent = DatosCifEntidade {
-                    url: sug.url.clone(),
-                    nome: sug.nombre.clone(),
-                    tipo_entidad: sug.tipo_entidad,
-                    uri: sug.uri.clone(),
-                    ..Default::default()
-                };
-                // Só as empresas teñen ficha (CIF, municipio…) e cargos; as
-                // persoas gárdanse tal cal coa suxestión.
-                if ent.is_empresa() {
-                    std::thread::sleep(THROTTLE);
-                    refresh_empresa(client, db, tx, &mut ent, &now, &mut result)?;
-                } else {
-                    db.upsert_datoscif_entidade(&ent, false, &now)?;
+        // datoscif caeu/bloqueounos: deter o proceso (a mensaxe é clara) en vez de
+        // seguir e gravar falsos «sen match».
+        if client.datoscif_bloqueado() {
+            return Err(erro_datoscif_bloqueado(client));
+        }
+        // Un fallo de rede que deixou as buscas baleiras NON é «sen match» (sería
+        // un falso negativo): nese caso sáltase a empresa sen gravar nada.
+        let fallo_transitorio =
+            client.fallos_datoscif() > fallos_antes && matches!(decision, Decision::SenMatch);
+        if fallo_transitorio {
+            let _ = tx.send(Event::Log(format!(
+                "«{adx}» saltado temporalmente: datoscif non respondeu."
+            )));
+        } else {
+            match decision {
+                Decision::Auto(url, conf) => {
+                    let sug = suggestions
+                        .iter()
+                        .find(|s| s.url == url)
+                        .expect("o url vén das suxestións");
+                    let mut ent = DatosCifEntidade {
+                        url: sug.url.clone(),
+                        nome: sug.nombre.clone(),
+                        tipo_entidad: sug.tipo_entidad,
+                        uri: sug.uri.clone(),
+                        ..Default::default()
+                    };
+                    // Só as empresas teñen ficha (CIF, municipio…) e cargos; as
+                    // persoas gárdanse tal cal coa suxestión.
+                    if ent.is_empresa() {
+                        std::thread::sleep(THROTTLE);
+                        refresh_empresa(client, db, tx, &mut ent, &now, &mut result)?;
+                    } else {
+                        db.upsert_datoscif_entidade(&ent, false, &now)?;
+                    }
+                    db.upsert_match(
+                        adx,
+                        Some(&ent.url),
+                        conf.as_str(),
+                        EstadoMatch::Auto.as_str(),
+                        &now,
+                    )?;
+                    result.vinculados += 1;
                 }
-                db.upsert_match(
-                    adx,
-                    Some(&ent.url),
-                    conf.as_str(),
-                    EstadoMatch::Auto.as_str(),
-                    &now,
-                )?;
-                result.vinculados += 1;
-            }
-            Decision::Revisar(conf, candidatos) => {
-                db.upsert_candidatos(adx, &candidatos)?;
-                db.upsert_match(
-                    adx,
-                    None,
-                    conf.as_str(),
-                    EstadoMatch::Revisar.as_str(),
-                    &now,
-                )?;
-                result.a_revisar += 1;
-            }
-            Decision::SenMatch => {
-                db.upsert_match(
-                    adx,
-                    None,
-                    Confianza::SenMatch.as_str(),
-                    EstadoMatch::Pendente.as_str(),
-                    &now,
-                )?;
-                result.sen_match += 1;
+                Decision::Revisar(conf, candidatos) => {
+                    db.upsert_candidatos(adx, &candidatos)?;
+                    db.upsert_match(
+                        adx,
+                        None,
+                        conf.as_str(),
+                        EstadoMatch::Revisar.as_str(),
+                        &now,
+                    )?;
+                    result.a_revisar += 1;
+                }
+                Decision::SenMatch => {
+                    db.upsert_match(
+                        adx,
+                        None,
+                        Confianza::SenMatch.as_str(),
+                        EstadoMatch::Pendente.as_str(),
+                        &now,
+                    )?;
+                    result.sen_match += 1;
+                }
             }
         }
 
@@ -510,6 +544,9 @@ fn enrich_novos(
                     "Vinculación de membros de UTE cancelada.".into(),
                 ));
                 break;
+            }
+            if client.datoscif_bloqueado() {
+                return Err(erro_datoscif_bloqueado(client));
             }
             if let Some(sug) = match_member(client, tx, cancel, nome, cif) {
                 let mut ent = DatosCifEntidade {

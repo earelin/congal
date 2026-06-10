@@ -21,9 +21,29 @@ pub fn fetch_detail(
         .send()
         .with_context(|| format!("GET detalle {id}"))?;
     let html = decode_bytes(&resp.bytes()?);
-    let (detail, resolucions) = parse_detail(id, &html);
+    let (detail, mut resolucions) = parse_detail(id, &html);
     let utes = parse_utes(&html, &resolucions);
+    assign_ute_nifs(&mut resolucions, &utes);
     Ok((detail, resolucions, utes))
+}
+
+/// Asigna a cada resolución adxudicada a unha UTE o CIF da propia UTE. O CIF da
+/// UTE non vive na táboa de resolución (que só trae o nome) senón na de
+/// licitadores, de onde o le `parse_utes`. Só se aplica cando é un CIF válido:
+/// as UTE sen CIF formal levan un identificador temporal «TEMP-…» que se ignora.
+fn assign_ute_nifs(resolucions: &mut [Resolucion], utes: &[Ute]) {
+    for u in utes {
+        let cif = normalize_nif(&u.nif);
+        if !nif_token_re().is_match(&cif) {
+            continue;
+        }
+        let key = company_key(&u.nome);
+        for r in resolucions.iter_mut() {
+            if r.nif.is_empty() && company_key(&r.adxudicatario) == key {
+                r.nif = cif.clone();
+            }
+        }
+    }
 }
 
 fn dt_dd_re() -> &'static Regex {
@@ -488,6 +508,21 @@ mod tests {
         assert_eq!(u.membros.len(), 2);
         assert!(u.membros.iter().any(|m| m.cif == "B32487191"));
         assert!(u.membros.iter().any(|m| m.cif == "B70242946"));
+    }
+
+    #[test]
+    fn resolucion_de_ute_recibe_o_cif_da_ute() {
+        // O CIF da UTE non está na táboa de resolución, senón na de licitadores.
+        // `assign_ute_nifs` debe trasladalo á resolución adxudicada á UTE.
+        let bytes = include_bytes!("../../tests/fixtures/detalle_ute_solo_828260.html");
+        let html = crate::scraper::decode_bytes(bytes);
+        let (_d, mut res) = parse_detail("828260", &html);
+        let utes = parse_utes(&html, &res);
+        assign_ute_nifs(&mut res, &utes);
+        assert!(
+            res.iter().any(|r| r.nif == "U21902259"),
+            "a resolución da UTE debe levar o CIF U21902259"
+        );
     }
 
     #[test]

@@ -15,6 +15,29 @@ pub const DATOSCIF_BASE: &str = "https://www.datoscif.es";
 /// Tope de páxinas de cargos por entidade (rede de seguridade fronte a bucles).
 const MAX_PAGINAS: i64 = 50;
 
+/// Envía unha petición a datoscif, esixe un status 2xx e devolve o corpo como
+/// texto. Rexistra o resultado no contador de fallos do cliente para detectar un
+/// bloqueo por IP: un 502/403/429, un timeout ou unha conexión rexeitada contan
+/// como fallo (e NON como «sen resultados», que sería un corpo 2xx baleiro).
+fn enviar(
+    client: &Client,
+    rb: reqwest::blocking::RequestBuilder,
+    contexto: &str,
+) -> Result<String> {
+    match rb.send().and_then(|r| r.error_for_status()) {
+        Ok(resp) => {
+            let texto = resp.text();
+            client.nota_datoscif(texto.is_ok());
+            texto.with_context(|| format!("lendo resposta de datoscif ({contexto})"))
+        }
+        Err(e) => {
+            client.nota_datoscif(false);
+            Err(anyhow::Error::new(e)
+                .context(format!("{contexto} (datoscif pode estar a bloquear a IP)")))
+        }
+    }
+}
+
 /// Codifica un valor de formulario en `application/x-www-form-urlencoded` usando
 /// **ISO-8859-1** (datoscif espera o ñ como `%F1`, non `%C3%91` de UTF-8). Os
 /// puntos de código fóra de Latin-1 (raros tras normalizar) omítense.
@@ -42,15 +65,13 @@ pub fn search_entities(client: &Client, termo: &str) -> Result<Vec<Suggestion>> 
     }
     let url = format!("{DATOSCIF_BASE}/sugerencias.ajax");
     let body = format!("nombre={}&tipo=autocompletar", form_encode_latin1(&termo));
-    let resp = client
+    let rb = client
         .http()
         .post(&url)
         .header("X-Requested-With", "XMLHttpRequest")
         .header("Content-Type", "application/x-www-form-urlencoded")
-        .body(body)
-        .send()
-        .with_context(|| format!("POST sugerencias '{termo}'"))?;
-    let body = resp.text().with_context(|| "lendo sugerencias")?;
+        .body(body);
+    let body = enviar(client, rb, &format!("POST sugerencias '{termo}'"))?;
     // O servidor pode devolver unha cadea baleira ou "[]" se non hai resultados.
     // Cando unha entidade foi renomeada, a suxestión trae `url_new`/`nombre_new`
     // e a ficha co CIF e cargos vive no slug NOVO: seguímolo aquí.
@@ -139,7 +160,7 @@ pub fn fetch_cargos(client: &Client, slug: &str) -> Result<Vec<CargoRow>> {
     let mut pagina = 1;
     loop {
         let pag = pagina.to_string();
-        let resp = client
+        let rb = client
             .http()
             .post(&url)
             .header("X-Requested-With", "XMLHttpRequest")
@@ -151,10 +172,8 @@ pub fn fetch_cargos(client: &Client, slug: &str) -> Result<Vec<CargoRow>> {
                 ("cargo", ""),
                 ("nombre", ""),
                 ("tipo_entidad", "1"),
-            ])
-            .send()
-            .with_context(|| format!("POST cargos {slug} páxina {pagina}"))?;
-        let body = resp.text().with_context(|| "lendo cargos")?;
+            ]);
+        let body = enviar(client, rb, &format!("POST cargos {slug} páxina {pagina}"))?;
         let page: CargosPage = serde_json::from_str(&body).unwrap_or(CargosPage {
             datos: Vec::new(),
             num_paginas: 0,
@@ -196,13 +215,9 @@ fn itemprop_re(prop: &str) -> Regex {
 /// provincia…). Os datos veñen en microdata schema.org (`itemprop`).
 pub fn fetch_empresa_info(client: &Client, slug: &str) -> Result<EmpresaInfo> {
     let url = format!("{DATOSCIF_BASE}/empresa/{slug}");
-    let resp = client
-        .http()
-        .get(&url)
-        .send()
-        .with_context(|| format!("GET ficha {slug}"))?;
     // datoscif é UTF-8: lemos o corpo como texto directamente.
-    let html = resp.text().with_context(|| "lendo ficha empresa")?;
+    let rb = client.http().get(&url);
+    let html = enviar(client, rb, &format!("GET ficha {slug}"))?;
     Ok(parse_empresa_info(&html))
 }
 

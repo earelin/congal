@@ -2,9 +2,9 @@
 
 use crate::model::{
     CargoRow, CasoRevision, ContractDetail, ContractSummary, ContratoAdxudicado, DatosCifEntidade,
-    EmpresaNodo, GrupoRelacion, LocalFilters, LocalRow, PersoaNodo, Resolucion, Suggestion, Ute,
-    UteRelacion, company_key, format_data_gl, format_importe, normalize_search, parse_data,
-    parse_importe,
+    EmpresaNodo, GrupoRelacion, LocalFilters, LocalRow, MenorRow, PersoaNodo, Resolucion,
+    Suggestion, TipoContrato, Ute, UteRelacion, company_key, format_data_gl, format_importe,
+    normalize_search, parse_data, parse_importe,
 };
 use anyhow::Result;
 use rusqlite::functions::FunctionFlags;
@@ -28,7 +28,6 @@ pub struct DbStats {
 pub struct LocalOptions {
     pub adxudicatarios: Vec<String>,
     pub organismos: Vec<String>,
-    pub estados: Vec<String>,
     pub anos: Vec<String>,
 }
 
@@ -61,10 +60,6 @@ fn local_where(f: &LocalFilters) -> (String, Vec<String>) {
         sql.push_str(" AND nrm(o.nome) LIKE ?");
         args.push(format!("%{}%", normalize_search(&f.organismo)));
     }
-    if !f.estado.trim().is_empty() {
-        sql.push_str(" AND nrm(e.nome) LIKE ?");
-        args.push(format!("%{}%", normalize_search(&f.estado)));
-    }
     if !f.year.trim().is_empty() {
         sql.push_str(" AND c.data_publicacion LIKE ?");
         args.push(format!("%{}%", f.year.trim()));
@@ -78,6 +73,59 @@ fn local_where(f: &LocalFilters) -> (String, Vec<String>) {
         args.push(format!("%{}%", normalize_search(&f.adxudicatario)));
     }
     (sql, args)
+}
+
+/// SELECT + FROM común do listado local (unha fila por contrato, cos lotes/
+/// resolucións agregados). O chamador engade a cláusula WHERE, a orde e, de ser
+/// o caso, LIMIT/OFFSET. As columnas están na orde que espera [`map_local_row`].
+const LOCAL_SELECT: &str = r#"SELECT c.id, COALESCE(c.tipo,'licitacion'), COALESCE(c.referencia,''),
+              COALESCE(c.asunto,''), c.importe_num, COALESCE(e.nome,''),
+              COALESCE(c.data_publicacion,''), COALESCE(o.nome,''),
+              COALESCE(r.adxudicatarios,''), COALESCE(r.nifs,''), r.importe_total,
+              COALESCE(c.duracion,''), COALESCE(d.enlace_resolucion,''),
+              r.max_part, r.min_part
+       FROM contracts c
+       LEFT JOIN organismos o ON o.cod_organismo = c.cod_organismo
+       LEFT JOIN estados e ON e.cod_estado = c.cod_estado
+       LEFT JOIN contract_detail d ON d.contract_id = c.id
+       LEFT JOIN (
+           SELECT contract_id,
+                  GROUP_CONCAT(DISTINCT NULLIF(TRIM(adxudicatario),'')) AS adxudicatarios,
+                  GROUP_CONCAT(DISTINCT NULLIF(TRIM(nif),'')) AS nifs,
+                  SUM(importe_resolucion_num) AS importe_total,
+                  MAX(CAST(participacion AS INTEGER)) AS max_part,
+                  MIN(CAST(participacion AS INTEGER)) AS min_part
+           FROM contract_resolucion
+           GROUP BY contract_id
+       ) r ON r.contract_id = c.id"#;
+
+/// Constrúe un [`LocalRow`] a partir dunha fila de [`LOCAL_SELECT`].
+fn map_local_row(row: &rusqlite::Row) -> rusqlite::Result<LocalRow> {
+    let tipo_txt: String = row.get(1)?;
+    let importe_num: Option<f64> = row.get(4)?;
+    let data_iso: String = row.get(6)?;
+    let importe_total: Option<f64> = row.get(10)?;
+    let max_part: Option<i64> = row.get(13)?;
+    let min_part: Option<i64> = row.get(14)?;
+    Ok(LocalRow {
+        id: row.get(0)?,
+        tipo: TipoContrato::from_db(&tipo_txt),
+        referencia: row.get(2)?,
+        asunto: row.get(3)?,
+        importe_txt: importe_num.map(format_importe).unwrap_or_default(),
+        estado: row.get(5)?,
+        publicacion: format_data_gl(&data_iso),
+        organismo: row.get(7)?,
+        adxudicatario: row.get(8)?,
+        nif: row.get(9)?,
+        duracion: row.get(11)?,
+        importe_resolucion_txt: importe_total.map(format_importe).unwrap_or_default(),
+        enlace_resolucion: row.get(12)?,
+        // Único participante só se TODOS os lotes constan cun único participante:
+        // se algún ten participación descoñecida/baleira (CAST → 0) ou maior, non
+        // se marca.
+        participante_unico: max_part == Some(1) && min_part == Some(1),
+    })
 }
 
 impl Db {
@@ -140,12 +188,15 @@ impl Db {
 
             CREATE TABLE IF NOT EXISTS contracts (
                 id                TEXT PRIMARY KEY,
+                tipo              TEXT NOT NULL DEFAULT 'licitacion', -- 'licitacion' | 'menor'
                 referencia        TEXT,
                 asunto            TEXT,
                 importe_num       REAL,
                 cod_estado        INTEGER REFERENCES estados(cod_estado),
                 data_publicacion  TEXT,   -- ISO 8601 'YYYY-MM-DD'
                 cod_organismo     TEXT REFERENCES organismos(cod_organismo),
+                -- Duración (só contratos menores; nas licitacións queda NULL).
+                duracion          TEXT,
                 detalle_descargado INTEGER NOT NULL DEFAULT 0,
                 actualizado_en    TEXT    -- ISO 8601 'YYYY-MM-DD HH:MM:SS'
             );
@@ -211,6 +262,7 @@ impl Db {
             );
 
             CREATE INDEX IF NOT EXISTS idx_contracts_org   ON contracts(cod_organismo);
+            CREATE INDEX IF NOT EXISTS idx_contracts_tipo  ON contracts(cod_organismo, tipo);
             CREATE INDEX IF NOT EXISTS idx_contracts_estado ON contracts(cod_estado);
             CREATE INDEX IF NOT EXISTS idx_contracts_data  ON contracts(data_publicacion);
             CREATE INDEX IF NOT EXISTS idx_res_contract    ON contract_resolucion(contract_id);
@@ -346,12 +398,13 @@ impl Db {
             // estado vén baleiro: a subconsulta non casa con ningunha fila).
             let mut stmt = tx.prepare(
                 r#"INSERT INTO contracts
-                    (id, referencia, asunto, importe_num, cod_estado,
+                    (id, tipo, referencia, asunto, importe_num, cod_estado,
                      data_publicacion, cod_organismo, actualizado_en)
-                   VALUES (?1,?2,?3,?4,
-                     (SELECT cod_estado FROM estados WHERE nome=?5),
-                     ?6,?7,?8)
+                   VALUES (?1,?2,?3,?4,?5,
+                     (SELECT cod_estado FROM estados WHERE nome=?6),
+                     ?7,?8,?9)
                    ON CONFLICT(id) DO UPDATE SET
+                     tipo=excluded.tipo,
                      referencia=excluded.referencia,
                      asunto=excluded.asunto,
                      importe_num=excluded.importe_num,
@@ -365,6 +418,7 @@ impl Db {
                 let cod = Some(r.cod_organismo.trim()).filter(|c| !c.is_empty());
                 stmt.execute(params![
                     r.id,
+                    r.tipo.as_str(),
                     r.referencia,
                     r.asunto,
                     parse_importe(&r.importe),
@@ -373,6 +427,68 @@ impl Db {
                     cod,
                     now,
                 ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Inserta/actualiza os contratos menores dun organismo. Cada menor garda
+    /// ademais unha única fila en `contract_resolucion` co seu adxudicatario
+    /// (nome + NIF + importe), para integrarse na agregación do listado e na
+    /// análise de relacións igual ca as licitacións.
+    pub fn upsert_menores(
+        &mut self,
+        org_id: &str,
+        org_nome: &str,
+        rows: &[MenorRow],
+        now: &str,
+    ) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        {
+            tx.execute(
+                r#"INSERT INTO organismos (cod_organismo, nome) VALUES (?1, ?2)
+                   ON CONFLICT(cod_organismo) DO UPDATE SET nome=excluded.nome"#,
+                params![org_id, org_nome],
+            )?;
+
+            let mut up = tx.prepare(
+                r#"INSERT INTO contracts
+                    (id, tipo, asunto, importe_num, data_publicacion, cod_organismo,
+                     duracion, actualizado_en)
+                   VALUES (?1,'menor',?2,?3,?4,?5,?6,?7)
+                   ON CONFLICT(id) DO UPDATE SET
+                     tipo='menor',
+                     asunto=excluded.asunto,
+                     importe_num=excluded.importe_num,
+                     data_publicacion=excluded.data_publicacion,
+                     cod_organismo=excluded.cod_organismo,
+                     duracion=excluded.duracion,
+                     actualizado_en=excluded.actualizado_en"#,
+            )?;
+            let mut del_res =
+                tx.prepare("DELETE FROM contract_resolucion WHERE contract_id = ?1")?;
+            // O adxudicatario do menor gárdase como unha única resolución (sen
+            // lote nin estado), reutilizando a táboa que xa agrega o listado.
+            let mut ins_res = tx.prepare(
+                r#"INSERT INTO contract_resolucion
+                    (contract_id, lote, participacion, cod_estado_resolucion, adxudicatario,
+                     nif, importe_resolucion_num, data_difusion, prazo_execucion, recurso)
+                   VALUES (?1,'','',NULL,?2,?3,?4,'','','')"#,
+            )?;
+            for r in rows {
+                let id = r.id.to_string();
+                up.execute(params![
+                    id,
+                    r.objeto,
+                    r.importe,
+                    parse_data(&r.publicado),
+                    org_id,
+                    r.duracion,
+                    now,
+                ])?;
+                del_res.execute(params![id])?;
+                ins_res.execute(params![id, r.adjudicatario, r.nif, r.importe])?;
             }
         }
         tx.commit()?;
@@ -538,64 +654,77 @@ impl Db {
     /// adxudicatarios e a de importe de resolución amosa a suma adxudicada (o
     /// desglose por lote vese na vista de detalle).
     pub fn query_local(&self, f: &LocalFilters) -> Result<Vec<LocalRow>> {
+        self.query_local_inner(f, None)
+    }
+
+    /// Como [`Self::query_local`] pero devolve só unha **páxina** do resultado
+    /// (para a carga progresiva da táboa virtual): as filas `[offset, offset+limit)`
+    /// na orde actual. Combínase con [`Self::count_local`] para coñecer o total.
+    pub fn query_local_page(
+        &self,
+        f: &LocalFilters,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Vec<LocalRow>> {
+        self.query_local_inner(f, Some((offset, limit)))
+    }
+
+    /// Número total de contratos que casan cos filtros (sen traer as filas).
+    pub fn count_local(&self, f: &LocalFilters) -> Result<usize> {
         let mut sql = String::from(
-            r#"SELECT c.id, COALESCE(c.referencia,''), COALESCE(c.asunto,''),
-                      c.importe_num, COALESCE(e.nome,''),
-                      COALESCE(c.data_publicacion,''), COALESCE(o.nome,''),
-                      COALESCE(r.adxudicatarios,''), r.importe_total,
-                      COALESCE(d.enlace_resolucion,''), r.max_part, r.min_part
-               FROM contracts c
-               LEFT JOIN organismos o ON o.cod_organismo = c.cod_organismo
-               LEFT JOIN estados e ON e.cod_estado = c.cod_estado
-               LEFT JOIN contract_detail d ON d.contract_id = c.id
-               LEFT JOIN (
-                   SELECT contract_id,
-                          GROUP_CONCAT(DISTINCT NULLIF(TRIM(adxudicatario),'')) AS adxudicatarios,
-                          SUM(importe_resolucion_num) AS importe_total,
-                          MAX(CAST(participacion AS INTEGER)) AS max_part,
-                          MIN(CAST(participacion AS INTEGER)) AS min_part
-                   FROM contract_resolucion
-                   GROUP BY contract_id
-               ) r ON r.contract_id = c.id
-               WHERE 1=1"#,
+            "SELECT COUNT(*) FROM contracts c \
+             LEFT JOIN organismos o ON o.cod_organismo = c.cod_organismo \
+             WHERE c.tipo = ?",
         );
-        let (where_sql, args) = local_where(f);
+        let (where_sql, mut args) = local_where(f);
+        args.insert(0, f.tipo.as_str().to_string());
+        sql.push_str(&where_sql);
+        let params: Vec<&dyn rusqlite::ToSql> =
+            args.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+        let n: i64 = self.conn.query_row(&sql, params.as_slice(), |r| r.get(0))?;
+        Ok(n.max(0) as usize)
+    }
+
+    /// Carga unha única fila do listado polo seu id (para saltar a un contrato
+    /// concreto sen ter cargada a súa páxina).
+    pub fn query_local_by_id(&self, id: &str) -> Result<Option<LocalRow>> {
+        let sql = format!("{LOCAL_SELECT} WHERE c.id = ?1");
+        let row = self.conn.query_row(&sql, params![id], map_local_row).ok();
+        Ok(row)
+    }
+
+    fn query_local_inner(
+        &self,
+        f: &LocalFilters,
+        page: Option<(usize, usize)>,
+    ) -> Result<Vec<LocalRow>> {
+        let mut sql = format!("{LOCAL_SELECT} WHERE c.tipo = ?");
+        let (where_sql, mut args) = local_where(f);
+        // O primeiro parámetro posicional é o tipo (sub-pestana activa).
+        args.insert(0, f.tipo.as_str().to_string());
         sql.push_str(&where_sql);
         // Orde escollida na cabeceira (expresión fixa, sen entrada do usuario);
         // os valores baleiros/NULL van ao final, e o id (numérico) desempata de
         // xeito estable.
         let dir = if f.sort_asc { "ASC" } else { "DESC" };
         sql.push_str(&format!(
-            " ORDER BY {} {dir} NULLS LAST, CAST(c.id AS INTEGER) DESC LIMIT 5000",
+            " ORDER BY {} {dir} NULLS LAST, CAST(c.id AS INTEGER) DESC",
             f.sort_col.order_sql()
         ));
+        // Paxinación opcional: a táboa virtual carga por chuncos.
+        let (limit, offset) = page.map(|(o, l)| (l as i64, o as i64)).unwrap_or((-1, 0));
+        if page.is_some() {
+            sql.push_str(" LIMIT ? OFFSET ?");
+        }
 
         let mut stmt = self.conn.prepare(&sql)?;
-        let params_dyn: Vec<&dyn rusqlite::ToSql> =
+        let mut params: Vec<&dyn rusqlite::ToSql> =
             args.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
-        let rows = stmt.query_map(params_dyn.as_slice(), |row| {
-            let importe_num: Option<f64> = row.get(3)?;
-            let data_iso: String = row.get(5)?;
-            let importe_total: Option<f64> = row.get(8)?;
-            let max_part: Option<i64> = row.get(10)?;
-            let min_part: Option<i64> = row.get(11)?;
-            Ok(LocalRow {
-                id: row.get(0)?,
-                referencia: row.get(1)?,
-                asunto: row.get(2)?,
-                importe_txt: importe_num.map(format_importe).unwrap_or_default(),
-                estado: row.get(4)?,
-                publicacion: format_data_gl(&data_iso),
-                organismo: row.get(6)?,
-                adxudicatario: row.get(7)?,
-                importe_resolucion_txt: importe_total.map(format_importe).unwrap_or_default(),
-                enlace_resolucion: row.get(9)?,
-                // Único participante só se TODOS os lotes constan cun único
-                // participante: se algún ten participación descoñecida/baleira
-                // (CAST → 0) ou maior, non se marca.
-                participante_unico: max_part == Some(1) && min_part == Some(1),
-            })
-        })?;
+        if page.is_some() {
+            params.push(&limit);
+            params.push(&offset);
+        }
+        let rows = stmt.query_map(params.as_slice(), map_local_row)?;
         let mut out = Vec::new();
         for r in rows {
             out.push(r?);
@@ -691,10 +820,6 @@ impl Db {
             "SELECT nome FROM organismos \
              WHERE TRIM(COALESCE(nome,'')) <> '' ORDER BY nome COLLATE NOCASE",
         )?;
-        let estados = self.distinct(
-            "SELECT nome FROM estados \
-             WHERE TRIM(COALESCE(nome,'')) <> '' ORDER BY nome COLLATE NOCASE",
-        )?;
         let datas = self.distinct(
             "SELECT DISTINCT data_publicacion FROM contracts \
              WHERE TRIM(COALESCE(data_publicacion,'')) <> ''",
@@ -709,7 +834,6 @@ impl Db {
         Ok(LocalOptions {
             adxudicatarios,
             organismos,
-            estados,
             anos,
         })
     }
@@ -1532,6 +1656,7 @@ mod tests {
     ) -> ContractSummary {
         ContractSummary {
             id: id.into(),
+            tipo: TipoContrato::Licitacion,
             referencia: format!("R{id}"),
             asunto: asunto.into(),
             importe: String::new(),
@@ -1542,6 +1667,54 @@ mod tests {
             cod_organismo: format!("OR-{organismo}"),
             organismo: organismo.into(),
         }
+    }
+
+    // Carga progresiva: `count_local` + `query_local_page` deben repartir o mesmo
+    // resultado (e na mesma orde) ca `query_local`, e `query_local_by_id` traer un.
+    #[test]
+    fn conta_e_paxina_o_listado_local() {
+        let path = std::env::temp_dir().join("congal_test_paxina.sqlite");
+        let _ = std::fs::remove_file(&path);
+        let mut db = Db::open(&path).expect("db");
+        let filas: Vec<ContractSummary> = (1..=5)
+            .map(|i| {
+                summary(
+                    &i.to_string(),
+                    &format!("obxecto {i}"),
+                    "Org",
+                    "Estado",
+                    "0{i}-01-2025",
+                )
+            })
+            .collect();
+        db.upsert_summaries(&filas, "agora").expect("upsert");
+
+        let f = LocalFilters::default();
+        assert_eq!(db.count_local(&f).expect("count"), 5);
+
+        let todo = db.query_local(&f).expect("todo");
+        assert_eq!(todo.len(), 5);
+
+        // As páxinas concatenadas reproducen a lista completa na mesma orde.
+        let p1 = db.query_local_page(&f, 0, 2).expect("p1");
+        let p2 = db.query_local_page(&f, 2, 2).expect("p2");
+        let p3 = db.query_local_page(&f, 4, 2).expect("p3");
+        assert_eq!(p1.len(), 2);
+        assert_eq!(p2.len(), 2);
+        assert_eq!(p3.len(), 1); // última páxina parcial
+        let ids_paxinas: Vec<String> = p1
+            .iter()
+            .chain(&p2)
+            .chain(&p3)
+            .map(|r| r.id.clone())
+            .collect();
+        let ids_todo: Vec<String> = todo.iter().map(|r| r.id.clone()).collect();
+        assert_eq!(ids_paxinas, ids_todo);
+
+        assert!(db.query_local_by_id("3").expect("by id").is_some());
+        assert!(db.query_local_by_id("nope").expect("by id").is_none());
+
+        let _ = std::fs::remove_file(&path);
     }
 
     // Reproduce o fallo de nrm(NULL): un contrato sen resolución deixa
@@ -1717,6 +1890,7 @@ mod tests {
 
         let s = ContractSummary {
             id: "100".into(),
+            tipo: TipoContrato::Licitacion,
             referencia: "R100".into(),
             asunto: "obra".into(),
             importe: "1.234,56 €".into(),
@@ -1782,16 +1956,6 @@ mod tests {
         )
         .expect("upsert summaries");
 
-        // Só dous estados distintos quedan na táboa `estados`.
-        let opts = db.local_options().expect("options");
-        assert_eq!(
-            opts.estados,
-            vec![
-                "Formalizado".to_string(),
-                "Pendente de adxudicar".to_string()
-            ]
-        );
-
         // O nome do estado cárgase vía JOIN na consulta local.
         let rows = db.query_local(&LocalFilters::default()).expect("query");
         let r1 = rows.iter().find(|r| r.id == "1").expect("fila 1");
@@ -1803,15 +1967,6 @@ mod tests {
             Some("Pendente de adxudicar")
         );
         assert_eq!(db.estado_previo("descoñecido").expect("previo"), None);
-
-        // Filtro por estado, insensible a maiúsculas/acentos.
-        let f = LocalFilters {
-            estado: "pendente".into(),
-            ..Default::default()
-        };
-        let filtradas = db.query_local(&f).expect("query estado");
-        assert_eq!(filtradas.len(), 1);
-        assert_eq!(filtradas[0].id, "2");
 
         let _ = std::fs::remove_file(&path);
     }

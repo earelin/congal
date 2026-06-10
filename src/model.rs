@@ -9,97 +9,83 @@ pub fn current_year() -> i32 {
     Local::now().year()
 }
 
-/// Grupos de estado tal e como os amosa a web (catro caixas de selección),
-/// cada un mapeado aos códigos numéricos que entende `resultadoIndex.jsp`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EstadoGroup {
-    EnPrazo,
-    Pendente,
-    Resoltos,
-    Suspendidos,
+/// Tipo de contrato: licitación (procedemento ordinario) ou contrato menor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TipoContrato {
+    #[default]
+    Licitacion,
+    Menor,
 }
 
-impl EstadoGroup {
-    /// Códigos numéricos que representan este grupo no parámetro `ESTADO`.
-    pub fn codes(self) -> &'static str {
+impl TipoContrato {
+    /// Valor gardado na BD (columna `contracts.tipo`).
+    pub fn as_str(self) -> &'static str {
         match self {
-            EstadoGroup::EnPrazo => "1",
-            EstadoGroup::Pendente => "2,3",
-            EstadoGroup::Resoltos => "4,5,6,8",
-            EstadoGroup::Suspendidos => "7",
+            TipoContrato::Licitacion => "licitacion",
+            TipoContrato::Menor => "menor",
         }
     }
 
-    pub const ALL: [EstadoGroup; 4] = [
-        EstadoGroup::EnPrazo,
-        EstadoGroup::Pendente,
-        EstadoGroup::Resoltos,
-        EstadoGroup::Suspendidos,
-    ];
-}
+    /// Interpreta o texto gardado na BD.
+    pub fn from_db(s: &str) -> TipoContrato {
+        match s {
+            "menor" => TipoContrato::Menor,
+            _ => TipoContrato::Licitacion,
+        }
+    }
 
-/// Filtros da busca/scraping, equivalentes ao formulario web de licitacións.
-#[derive(Debug, Clone)]
-pub struct Filters {
-    pub estados: Vec<EstadoGroup>,
-    pub year: String,
-    pub organo: String,            // código OR
-    pub asunto: String,            // ASUNTO_Lic (busca textual)
-    pub tipo_contrato: String,     // TC
-    pub tipo_procedemento: String, // TP
-    pub tipo_tramitacion: String,  // TT
-    pub sistema: String,           // SC
-    pub materia: String,           // CPV
-}
-
-impl Default for Filters {
-    fn default() -> Self {
-        Filters {
-            estados: EstadoGroup::ALL.to_vec(),
-            year: current_year().to_string(),
-            organo: String::new(),
-            asunto: String::new(),
-            tipo_contrato: String::new(),
-            tipo_procedemento: String::new(),
-            tipo_tramitacion: String::new(),
-            sistema: String::new(),
-            materia: String::new(),
+    /// Etiqueta para a interface (sub-pestanas).
+    pub fn etiqueta(self) -> &'static str {
+        match self {
+            TipoContrato::Licitacion => "Licitacións",
+            TipoContrato::Menor => "Contratos menores",
         }
     }
 }
 
-impl Filters {
-    /// Constrúe o valor do parámetro `ESTADO`. Se non hai ningún grupo
-    /// seleccionado, devólvense todos os códigos (1..8).
-    pub fn estado_param(&self) -> String {
-        if self.estados.is_empty() {
-            return "1,2,3,4,5,6,7,8".to_string();
-        }
-        self.estados
-            .iter()
-            .map(|e| e.codes())
-            .collect::<Vec<_>>()
-            .join(",")
-    }
+/// Parámetros dunha importación: un organismo (o `org_id` é o valor de `organoL`,
+/// que coincide co id da API) e o ano que acouta a busca de contratos menores
+/// (as licitacións báixanse enteiras).
+#[derive(Debug, Clone, Default)]
+pub struct ImportParams {
+    pub org_id: String,
+    pub org_nome: String,
+    pub ano: String,
 }
 
-/// Rexistro do listado, tal e como vén no JSON oculto `#resSearch`.
+/// Fila do listado de contratos menores da API `.../contratosmenores/table`.
+/// Inclúe xa o adxudicatario (nome + NIF), polo que non precisa páxina de detalle.
+/// Os campos de texto poden vir con espazos de recheo → hai que facer `trim`.
 #[derive(Debug, Clone, Deserialize)]
+pub struct MenorRow {
+    pub id: i64,
+    #[serde(default)]
+    pub publicado: String,
+    #[serde(default)]
+    pub objeto: String,
+    #[serde(default)]
+    pub importe: Option<f64>,
+    #[serde(default)]
+    pub nif: String,
+    #[serde(default)]
+    pub adjudicatario: String,
+    #[serde(default)]
+    pub duracion: String,
+}
+
+/// Rexistro dun contrato para gardar no listado (DTO de escritura cara a
+/// `contracts`). Antes deserializábase do JSON oculto do listado web; agora
+/// constrúese a partir das filas da API (licitacións) ou nos tests.
+#[derive(Debug, Clone, Default)]
 pub struct ContractSummary {
     pub id: String,
-    #[serde(default)]
+    pub tipo: TipoContrato,
     pub referencia: String,
-    #[serde(default)]
     pub asunto: String,
-    #[serde(default)]
     pub importe: String,
-    #[serde(default)]
     pub estado: String,
-    #[serde(default)]
     pub publicacion: String,
-    #[serde(rename = "codOrganismo", default)]
     pub cod_organismo: String,
-    #[serde(default)]
     pub organismo: String,
 }
 
@@ -271,6 +257,7 @@ pub fn format_importe(v: f64) -> String {
 #[derive(Debug, Clone, Default)]
 pub struct LocalRow {
     pub id: String,
+    pub tipo: TipoContrato,
     pub referencia: String,
     pub asunto: String,
     pub importe_txt: String,
@@ -278,6 +265,11 @@ pub struct LocalRow {
     pub publicacion: String,
     pub organismo: String,
     pub adxudicatario: String,
+    /// NIF/CIF do adxudicatario (relevante sobre todo nos contratos menores, que
+    /// xa o traen no listado).
+    pub nif: String,
+    /// Duración do contrato menor (baleiro nas licitacións).
+    pub duracion: String,
     pub importe_resolucion_txt: String,
     pub enlace_resolucion: String,
     /// `true` se en TODOS os lotes da resolución consta un único participante
@@ -826,9 +818,11 @@ impl SortColumn {
 pub struct LocalFilters {
     pub texto: String,         // sobre asunto/referencia
     pub organismo: String,     // subcadea sobre nome do organismo
-    pub estado: String,        // subcadea sobre estado
     pub year: String,          // ano de publicación
     pub adxudicatario: String, // subcadea sobre adxudicatario
+    /// Tipo de contrato amosado (sub-pestana activa). Só o usa `query_local`; a
+    /// vista de relacións ignórao (considera os dous tipos).
+    pub tipo: TipoContrato,
     /// Orde do listado (columna + ascendente). Por defecto: data descendente.
     pub sort_col: SortColumn,
     pub sort_asc: bool,
@@ -902,15 +896,6 @@ mod tests {
         assert!(!is_estado_terminal("Pendente de adxudicar"));
         assert!(!is_estado_terminal("Adxudicado"));
         assert!(!is_estado_terminal("En prazo de presentación de ofertas"));
-    }
-
-    #[test]
-    fn estado_param_por_defecto_todos() {
-        let f = Filters::default();
-        let p = f.estado_param();
-        for c in ["1", "2", "3", "4", "5", "6", "7", "8"] {
-            assert!(p.contains(c), "falta o código {c} en {p}");
-        }
     }
 
     fn sug(nombre: &str, url: &str, tipo: i64) -> Suggestion {

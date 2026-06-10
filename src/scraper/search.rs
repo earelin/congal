@@ -1,25 +1,52 @@
-//! Busca de licitacións: POST a `resultadoIndex.jsp` e extracción do JSON oculto.
+//! Busca de licitacións por organismo + ano: `POST resultadoIndex.jsp` e
+//! extracción do JSON oculto `#resSearch`. A API do perfil do contratante non
+//! filtra licitacións por ano, así que para iso seguimos usando o buscador, que
+//! si filtra no servidor (parámetros `OR` = organismo e `YEAR` = ano).
 
-use crate::model::{ContractSummary, Filters};
+use crate::model::{ContractSummary, TipoContrato};
 use crate::scraper::{BASE, Client, decode_bytes};
 use anyhow::{Context, Result};
 use scraper::{Html, Selector};
+use serde::Deserialize;
+use std::collections::HashSet;
 
-/// Executa a busca cos filtros dados e devolve os rexistros do listado.
-///
-/// O filtro textual (`asunto`) aplícase localmente sobre o resultado, xa que o
-/// buscador do servidor non o trata de forma fiable.
-pub fn search(client: &Client, filters: &Filters) -> Result<Vec<ContractSummary>> {
-    let estado = filters.estado_param();
+/// Fila crúa do JSON oculto `#resSearch`.
+#[derive(Debug, Clone, Deserialize)]
+struct SearchRow {
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    referencia: String,
+    #[serde(default)]
+    asunto: String,
+    #[serde(default)]
+    importe: String,
+    #[serde(default)]
+    estado: String,
+    #[serde(default)]
+    publicacion: String,
+}
+
+/// Busca as licitacións dun organismo nun ano (filtro no servidor) e devólveas
+/// como `ContractSummary` (tipo licitación). O `cod_organismo`/`organismo`
+/// fíxanse aos da importación (o id de `organoL`, o mesmo que usan os menores),
+/// e NON ao `codOrganismo` do JSON, que pertence a outro espazo de códigos.
+/// Se `year` está baleiro, o servidor devolve as licitacións de todos os anos.
+pub fn search_licitaciones(
+    client: &Client,
+    org_id: &str,
+    org_nome: &str,
+    year: &str,
+) -> Result<Vec<ContractSummary>> {
     let form = [
-        ("TC", filters.tipo_contrato.as_str()),
-        ("TP", filters.tipo_procedemento.as_str()),
-        ("TT", filters.tipo_tramitacion.as_str()),
-        ("SC", filters.sistema.as_str()),
-        ("ESTADO", estado.as_str()),
-        ("CPV", filters.materia.as_str()),
-        ("YEAR", filters.year.as_str()),
-        ("OR", filters.organo.as_str()),
+        ("TC", ""),
+        ("TP", ""),
+        ("TT", ""),
+        ("SC", ""),
+        ("ESTADO", "1,2,3,4,5,6,7,8"),
+        ("CPV", ""),
+        ("YEAR", year),
+        ("OR", org_id),
         ("SO", "1"),
         ("FE", "1"),
     ];
@@ -34,25 +61,29 @@ pub fn search(client: &Client, filters: &Filters) -> Result<Vec<ContractSummary>
     let html = decode_bytes(&resp.bytes()?);
 
     let mut rows = parse_results(&html)?;
-
-    // O servidor pode devolver o mesmo contrato máis dunha vez (p.ex. unha
-    // entrada por lote). Como `id` identifica univocamente cada contrato,
-    // eliminamos os duplicados conservando a primeira aparición; así o reconto
-    // de atopados e a descarga de detalle non se repiten.
-    let mut vistos = std::collections::HashSet::new();
+    // O servidor pode repetir un contrato (unha entrada por lote); `id`
+    // identifícao univocamente, así que deduplicamos conservando o primeiro.
+    let mut vistos = HashSet::new();
     rows.retain(|r| vistos.insert(r.id.clone()));
 
-    if !filters.asunto.trim().is_empty() {
-        let q = filters.asunto.to_lowercase();
-        rows.retain(|r| {
-            r.asunto.to_lowercase().contains(&q) || r.referencia.to_lowercase().contains(&q)
-        });
-    }
-    Ok(rows)
+    Ok(rows
+        .into_iter()
+        .map(|r| ContractSummary {
+            id: r.id,
+            tipo: TipoContrato::Licitacion,
+            referencia: r.referencia,
+            asunto: r.asunto,
+            importe: r.importe,
+            estado: r.estado,
+            publicacion: r.publicacion,
+            cod_organismo: org_id.to_string(),
+            organismo: org_nome.to_string(),
+        })
+        .collect())
 }
 
 /// Extrae o array JSON do input oculto `#resSearch`.
-fn parse_results(html: &str) -> Result<Vec<ContractSummary>> {
+fn parse_results(html: &str) -> Result<Vec<SearchRow>> {
     let doc = Html::parse_document(html);
     let sel = Selector::parse("#resSearch").unwrap();
     let Some(el) = doc.select(&sel).next() else {
@@ -62,9 +93,7 @@ fn parse_results(html: &str) -> Result<Vec<ContractSummary>> {
     if val.is_empty() || val == "[]" {
         return Ok(Vec::new());
     }
-    let parsed: Vec<ContractSummary> =
-        serde_json::from_str(val).context("parsing resSearch JSON")?;
-    Ok(parsed)
+    serde_json::from_str(val).context("parsing resSearch JSON")
 }
 
 #[cfg(test)]
@@ -80,7 +109,7 @@ mod tests {
         let rows = parse_results(SAMPLE).unwrap();
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].id, "1");
-        assert_eq!(rows[0].organismo, "SERGAS");
+        assert_eq!(rows[0].asunto, "Obra do hospital de Lugo");
         assert_eq!(rows[1].asunto, "Subministración de papel");
     }
 
@@ -91,20 +120,15 @@ mod tests {
     }
 
     // O id identifica univocamente cada contrato: se o servidor repite un id
-    // (p.ex. unha entrada por lote), `search` debe deixar unha soa fila.
+    // (unha entrada por lote), tras deduplicar debe quedar unha soa fila.
     #[test]
-    fn search_elimina_contratos_repetidos_polo_id() {
+    fn deduplica_contratos_repetidos_polo_id() {
         let html = r#"<input id="resSearch" value="[{&quot;id&quot;:&quot;1&quot;,&quot;asunto&quot;:&quot;Lote A&quot;},{&quot;id&quot;:&quot;1&quot;,&quot;asunto&quot;:&quot;Lote B&quot;},{&quot;id&quot;:&quot;2&quot;,&quot;asunto&quot;:&quot;Outro&quot;}]">"#;
         let mut rows = parse_results(html).unwrap();
         assert_eq!(rows.len(), 3);
-
-        // Mesma deduplicación que aplica `search` tras analizar o JSON.
-        let mut vistos = std::collections::HashSet::new();
+        let mut vistos = HashSet::new();
         rows.retain(|r| vistos.insert(r.id.clone()));
-
         assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].id, "1");
         assert_eq!(rows[0].asunto, "Lote A"); // consérvase a primeira aparición
-        assert_eq!(rows[1].id, "2");
     }
 }

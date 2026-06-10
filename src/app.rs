@@ -4,15 +4,18 @@
 use crate::db::{Db, DbStats, LocalOptions};
 use crate::enrich::EnrichMode;
 use crate::model::{
-    CargoRow, CasoRevision, ContractDetail, DatosCifEntidade, FilterOptions, Filters,
-    GrupoRelacion, LocalFilters, LocalRow, Resolucion, SortColumn, Suggestion, format_data_gl,
-    format_importe,
+    CargoRow, CasoRevision, ContractDetail, DatosCifEntidade, FilterOptions, GrupoRelacion,
+    ImportParams, LocalFilters, LocalRow, Resolucion, SortColumn, Suggestion, TipoContrato,
+    format_data_gl, format_importe,
 };
 use crate::scraper::DATOSCIF_BASE;
 use crate::theme;
 use crate::worker::{Command, Event, Worker};
 use egui::{Align, Color32, Layout, RichText, ScrollArea};
 use egui_extras::{Column, TableBuilder};
+
+/// Tamaño de chunco da carga progresiva da táboa local (filas por consulta).
+const CHUNK: usize = 8000;
 
 pub struct App {
     worker: Worker,
@@ -24,8 +27,8 @@ pub struct App {
     /// Texto de busca de cada ComboBox, indexado polo seu id.
     combo_filtros: std::collections::HashMap<String, String>,
 
-    /// Filtros de importación (formulario do modal).
-    filters: Filters,
+    /// Parámetros de importación (formulario do modal: organismo + ano).
+    import: ImportParams,
     /// Visibilidade do modal de selección de filtros de importación.
     show_import_dialog: bool,
     /// Visibilidade do modal de progreso da importación.
@@ -44,7 +47,11 @@ pub struct App {
 
     local: LocalFilters,
     local_options: LocalOptions,
-    rows: Vec<LocalRow>,
+    /// Nº total de filas que casan cos filtros actuais (para a táboa virtual).
+    total_rows: usize,
+    /// Caché de filas cargadas por chunco (clave = índice de chunco = fila/`CHUNK`).
+    /// A táboa virtual carga progresivamente só os chuncos que entran en pantalla.
+    row_cache: std::collections::HashMap<usize, Vec<LocalRow>>,
     need_query: bool,
     /// Id do contrato seleccionado (resáltase na táboa e ábrese o seu diálogo).
     selected: Option<String>,
@@ -59,6 +66,8 @@ pub struct App {
 
     /// Pestana activa da vista principal.
     tab: Tab,
+    /// Sub-pestana activa na vista de contratos: licitacións ou contratos menores.
+    sub_tab: TipoContrato,
     /// Vista de relacións: grupos (tramas) de razóns sociais interconectadas.
     relacions: Vec<GrupoRelacion>,
     relacions_loaded: bool,
@@ -128,6 +137,13 @@ impl App {
         theme::install_fonts(&cc.egui_ctx);
         let dark = crate::system_dark();
         theme::apply(&cc.egui_ctx, dark);
+        // Ao virtualizar a táboa (`body.rows`), egui_extras pode rexistrar
+        // transitoriamente o mesmo id de cela en dous rectángulos nun fotograma
+        // (durante as pasadas de medición), o que dispara o aviso visual de
+        // colisión de ids de egui: un flash de rectángulos vermellos na táboa.
+        // É inocuo (non afecta á selección nin aos clics); desactivamos ese aviso
+        // de depuración para que non se vexa.
+        cc.egui_ctx.options_mut(|o| o.warn_on_id_clash = false);
 
         let db_path = crate::db_path();
         let db = Db::open(&db_path).expect("non se puido abrir a base de datos");
@@ -144,7 +160,10 @@ impl App {
             options: FilterOptions::default(),
             options_loaded: false,
             combo_filtros: std::collections::HashMap::new(),
-            filters: Filters::default(),
+            import: ImportParams {
+                ano: crate::model::current_year().to_string(),
+                ..ImportParams::default()
+            },
             show_import_dialog: false,
             show_progress_dialog: false,
             busy: false,
@@ -156,7 +175,8 @@ impl App {
             stats,
             local: LocalFilters::default(),
             local_options,
-            rows: Vec::new(),
+            total_rows: 0,
+            row_cache: std::collections::HashMap::new(),
             need_query: true,
             selected: None,
             selected_row: None,
@@ -164,6 +184,7 @@ impl App {
             selected_datoscif: Vec::new(),
             selected_utes: Vec::new(),
             tab: Tab::Contratos,
+            sub_tab: TipoContrato::Licitacion,
             relacions: Vec::new(),
             relacions_loaded: false,
             revisions: Vec::new(),
@@ -195,8 +216,14 @@ impl App {
                     self.busy = false;
                     self.progress = None;
                     self.status = format!(
-                        "Sincronización rematada · {} novos · {} actualizados · {} resoltos saltados · {} detalles · {} erros",
-                        r.novos, r.actualizados, r.saltados, r.detalles_descargados, r.erros
+                        "Importación rematada · {} licitacións ({} novas · {} actualizadas · {} saltadas · {} detalles) · {} contratos menores · {} erros",
+                        r.licitacions,
+                        r.novos,
+                        r.actualizados,
+                        r.saltados,
+                        r.detalles_descargados,
+                        r.menores,
+                        r.erros
                     );
                     self.stats = self.db.stats().unwrap_or_default();
                     self.local_options = self.db.local_options().unwrap_or_default();
@@ -347,9 +374,33 @@ impl App {
     }
 
     fn refresh_local(&mut self) {
-        match self.db.query_local(&self.local) {
-            Ok(rows) => self.rows = rows,
-            Err(e) => self.status = format!("⚠ consulta local: {e}"),
+        // Carga progresiva: só contamos o total e baleiramos a caché de chuncos;
+        // as filas visibles cárganse baixo demanda en `results_table`.
+        self.row_cache.clear();
+        match self.db.count_local(&self.local) {
+            Ok(n) => self.total_rows = n,
+            Err(e) => {
+                self.total_rows = 0;
+                self.status = format!("⚠ consulta local: {e}");
+            }
+        }
+    }
+
+    /// Garante que o chunco que contén `index` está na caché; cárgao da BD se non.
+    fn ensure_chunk_loaded(&mut self, index: usize) {
+        let chunk = index / CHUNK;
+        if self.row_cache.contains_key(&chunk) {
+            return;
+        }
+        match self.db.query_local_page(&self.local, chunk * CHUNK, CHUNK) {
+            Ok(rows) => {
+                self.row_cache.insert(chunk, rows);
+            }
+            Err(e) => {
+                // Marcar o chunco como (baleiro) para non reintentar en bucle.
+                self.row_cache.insert(chunk, Vec::new());
+                self.status = format!("⚠ consulta local: {e}");
+            }
         }
     }
 
@@ -557,31 +608,32 @@ impl App {
     fn import_dialog(&mut self, ctx: &egui::Context) {
         let modal = egui::Modal::new(egui::Id::new("import_dialog")).show(ctx, |ui| {
             ui.set_width(480.0);
-            ui.heading("Importar contratos");
+            ui.heading("Importar contratos dun organismo");
             ui.label(
                 RichText::new(
-                    "Escolle o órgano de contratación (obrigatorio) e, opcionalmente, o ano. \
-                     Os contratos xa resoltos non se volven descargar; só se actualizan os que \
-                     seguían en proceso e os novos.",
+                    "Escolle o organismo (obrigatorio). Báixanse TODAS as súas licitacións \
+                     (as resoltas non se volven descargar; só as novas e as que seguían en \
+                     proceso) e os CONTRATOS MENORES do ano indicado. Cada importación engádese \
+                     ao teu conxunto local; podes importar varios organismos.",
                 )
                 .small()
                 .color(Color32::GRAY),
             );
             ui.add_space(12.0);
 
-            ui.label(RichText::new("Órgano de contratación").strong());
+            ui.label(RichText::new("Organismo").strong());
             combo_codigo(
                 ui,
                 "organo",
-                &mut self.filters.organo,
+                &mut self.import.org_id,
                 &self.options.organos,
                 self.combo_filtros.entry("organo".into()).or_default(),
                 false,
             );
             ui.add_space(10.0);
 
-            ui.label(RichText::new("Ano").strong());
-            year_combo(ui, &mut self.filters.year);
+            ui.label(RichText::new("Ano (contratos menores)").strong());
+            year_combo(ui, &mut self.import.ano);
 
             if !self.options_loaded {
                 ui.add_space(6.0);
@@ -596,21 +648,29 @@ impl App {
             ui.separator();
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                // O órgano é obrigatorio para evitar importacións masivas.
-                let pode_importar = !self.busy && !self.filters.organo.trim().is_empty();
+                // O organismo é obrigatorio para evitar importacións masivas.
+                let pode_importar = !self.busy && !self.import.org_id.trim().is_empty();
                 let importar = ui.add_enabled(
                     pode_importar,
                     egui::Button::new(RichText::new("Importar").color(Color32::WHITE))
                         .fill(theme::accent(self.dark)),
                 );
                 if importar.clicked() {
+                    // Resolver o nome do organismo a partir do código escollido.
+                    self.import.org_nome = self
+                        .options
+                        .organos
+                        .iter()
+                        .find(|(c, _)| c == &self.import.org_id)
+                        .map(|(_, n)| n.clone())
+                        .unwrap_or_default();
                     self.busy = true;
                     self.progress = None;
                     self.enrich_finished = false;
                     self.progress_titulo = "Importación de contratos";
                     self.logs.clear();
                     self.status = "Iniciando importación…".into();
-                    self.worker.send(Command::Sync(self.filters.clone()));
+                    self.worker.send(Command::Import(self.import.clone()));
                     self.show_import_dialog = false;
                     self.show_progress_dialog = true;
                 }
@@ -670,8 +730,25 @@ impl App {
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 if self.busy {
-                    if ui.button("Cancelar").clicked() {
+                    // O cancelamento só se aplica entre peticións; mentres se agarda
+                    // a que remate a que está en curso, deshabilitamos o botón e
+                    // avisamos para que non pareza que a app quedou pillada.
+                    let cancelando = self
+                        .worker
+                        .cancel
+                        .load(std::sync::atomic::Ordering::Relaxed);
+                    if ui
+                        .add_enabled(!cancelando, egui::Button::new("Cancelar"))
+                        .clicked()
+                    {
                         self.worker.request_cancel();
+                        self.status = "Cancelando… agardando a que remate a \
+                                       petición en curso."
+                            .into();
+                    }
+                    if cancelando {
+                        ui.add_space(8.0);
+                        ui.label(RichText::new("Cancelando…").italics());
                     }
                 } else {
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -734,15 +811,6 @@ impl App {
                     self.combo_filtros.entry("loc_org".into()).or_default(),
                 );
                 ui.add_space(6.0);
-                ui.label(RichText::new("Estado").strong());
-                changed |= combo_valor(
-                    ui,
-                    "loc_est",
-                    &mut self.local.estado,
-                    &self.local_options.estados,
-                    self.combo_filtros.entry("loc_est".into()).or_default(),
-                );
-                ui.add_space(6.0);
                 ui.label(RichText::new("Ano").strong());
                 changed |= combo_valor(
                     ui,
@@ -754,8 +822,12 @@ impl App {
 
                 ui.add_space(12.0);
                 if ui.button("Limpar").clicked() {
-                    self.local = LocalFilters::default();
-                    for k in ["loc_adx", "loc_org", "loc_est", "loc_ano"] {
+                    // Conservar a sub-pestana activa ao limpar os filtros.
+                    self.local = LocalFilters {
+                        tipo: self.sub_tab,
+                        ..LocalFilters::default()
+                    };
+                    for k in ["loc_adx", "loc_org", "loc_ano"] {
                         self.combo_filtros.remove(k);
                     }
                     changed = true;
@@ -771,7 +843,7 @@ impl App {
                 ui.add_space(10.0);
                 ui.separator();
                 let export = ui.add_enabled(
-                    !self.busy && !self.rows.is_empty() && self.export_rx.is_none(),
+                    !self.busy && self.total_rows > 0 && self.export_rx.is_none(),
                     egui::Button::new(RichText::new("Exportar a ODS").color(Color32::WHITE))
                         .fill(theme::accent(self.dark)),
                 );
@@ -793,7 +865,7 @@ impl App {
                     self.export_rx = Some(rx);
                 }
                 ui.label(
-                    RichText::new(format!("{} filas no resultado", self.rows.len()))
+                    RichText::new(format!("{} filas no resultado", self.total_rows))
                         .small()
                         .color(Color32::GRAY),
                 );
@@ -850,6 +922,7 @@ impl App {
                     if self.selected.is_some() {
                         self.detail_view(ui);
                     } else {
+                        self.contratos_subtabs(ui);
                         self.results_table(ui);
                     }
                 }
@@ -859,7 +932,32 @@ impl App {
         });
     }
 
+    /// Selector das dúas sub-pestanas (Licitacións / Contratos menores). Ao
+    /// cambiar, fíxase o tipo do filtro e relánzase a consulta.
+    fn contratos_subtabs(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            for tipo in [TipoContrato::Licitacion, TipoContrato::Menor] {
+                if ui
+                    .selectable_label(self.sub_tab == tipo, tipo.etiqueta())
+                    .clicked()
+                    && self.sub_tab != tipo
+                {
+                    self.sub_tab = tipo;
+                    self.local.tipo = tipo;
+                    // A orde por Estado/Imp. resolución non aplica aos menores:
+                    // ao trocar de sub-pestana volvemos á orde por data.
+                    self.local.sort_col = SortColumn::Data;
+                    self.local.sort_asc = SortColumn::Data.default_asc();
+                    self.need_query = true;
+                }
+            }
+        });
+        ui.add_space(4.0);
+    }
+
     fn results_table(&mut self, ui: &mut egui::Ui) {
+        let menor = self.sub_tab == TipoContrato::Menor;
         let mut clicked: Option<LocalRow> = None;
         let selected = self.selected.clone();
         // Cor de resalte para os contratos cun único participante.
@@ -884,7 +982,16 @@ impl App {
         // Texto non seleccionable nas celas: así o cursor non entra en modo
         // inserción de texto e o clic chega á fila enteira (sense ::click).
         ui.style_mut().interaction.selectable_labels = false;
+        // Carga progresiva: `total_rows` é o total (da BD); `cache` ten os chuncos
+        // xa cargados; `needed` recolle os que faltan polas filas visibles, para
+        // pedilos despois de pintar (a táboa virtual só visita as filas á vista).
+        let total_rows = self.total_rows;
+        let cache = &self.row_cache;
+        let mut needed: Vec<usize> = Vec::new();
         let out = TableBuilder::new(ui)
+            // Id estable e propio (separa o estado —anchos de columna, scroll— do
+            // doutras táboas e fixa a clave entre fotogramas).
+            .id_salt("contratos_table")
             .striped(true)
             .resizable(true)
             .sense(egui::Sense::click())
@@ -924,17 +1031,29 @@ impl App {
                 // e a etiqueta enche a cela (todo o ancho é clicable). Úsanse etiquetas
                 // clicables (non `selectable_label`) para que o fondo do hover non quede
                 // recortado polas columnas con `clip`.
-                for (t, col) in [
-                    ("ID", SortColumn::Id),
-                    ("Data", SortColumn::Data),
-                    ("Obxecto", SortColumn::Obxecto),
-                    ("Importe", SortColumn::Importe),
-                    ("Estado", SortColumn::Estado),
-                    ("Organismo", SortColumn::Organismo),
-                    ("Adxudicatario", SortColumn::Adxudicatario),
-                    ("Imp. resolución", SortColumn::ImporteResolucion),
-                ] {
-                    let activa = cur_col == col;
+                // As columnas 5 e 8 cambian segundo a sub-pestana: nas licitacións
+                // amósanse Estado e Imp. resolución (ordenables); nos contratos
+                // menores, NIF e Duración (non ordenables → `None`).
+                let cols: [(&str, Option<SortColumn>); 8] = [
+                    ("ID", Some(SortColumn::Id)),
+                    ("Data", Some(SortColumn::Data)),
+                    ("Obxecto", Some(SortColumn::Obxecto)),
+                    ("Importe", Some(SortColumn::Importe)),
+                    if menor {
+                        ("NIF", None)
+                    } else {
+                        ("Estado", Some(SortColumn::Estado))
+                    },
+                    ("Organismo", Some(SortColumn::Organismo)),
+                    ("Adxudicatario", Some(SortColumn::Adxudicatario)),
+                    if menor {
+                        ("Duración", None)
+                    } else {
+                        ("Imp. resolución", Some(SortColumn::ImporteResolucion))
+                    },
+                ];
+                for (t, col) in cols {
+                    let activa = col == Some(cur_col);
                     let etiqueta = if activa {
                         format!("{t} {}", if cur_asc { "▲" } else { "▼" })
                     } else {
@@ -949,7 +1068,11 @@ impl App {
                         // para pintarlles a man a liña separadora que egui_extras non debuxa.
                         if matches!(
                             col,
-                            SortColumn::Obxecto | SortColumn::Organismo | SortColumn::Adxudicatario
+                            Some(
+                                SortColumn::Obxecto
+                                    | SortColumn::Organismo
+                                    | SortColumn::Adxudicatario
+                            )
                         ) {
                             sep_xs.push(ui.max_rect().right() + spacing_x);
                         }
@@ -961,78 +1084,105 @@ impl App {
                                 |ui| ui.add(lab),
                             )
                             .inner;
-                        if resp
-                            .on_hover_cursor(egui::CursorIcon::PointingHand)
-                            .clicked()
+                        // Só as columnas con `SortColumn` reaccionan ao clic.
+                        if let Some(c) = col
+                            && resp
+                                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                                .clicked()
                         {
-                            clicked_header = Some(col);
+                            clicked_header = Some(c);
                         }
                     });
                 }
             })
-            .body(|mut body| {
-                for r in &self.rows {
+            .body(|body| {
+                // Virtualización + carga progresiva: `rows` só constrúe as filas
+                // visibles, e os datos cárganse por chuncos baixo demanda. Unha fila
+                // aínda non cargada píntase como «…» e o seu chunco márcase para pedir.
+                body.rows(22.0, total_rows, |mut row| {
+                    let i = row.index();
+                    let chunk = i / CHUNK;
+                    let Some(r) = cache.get(&chunk).and_then(|rows| rows.get(i % CHUNK)) else {
+                        if !needed.contains(&chunk) {
+                            needed.push(chunk);
+                        }
+                        for _ in 0..8 {
+                            row.col(|ui| {
+                                pad_cela(ui);
+                                ui.label(RichText::new("…").weak());
+                            });
+                        }
+                        return;
+                    };
                     let is_sel = selected.as_deref() == Some(r.id.as_str());
-                    body.row(22.0, |mut row| {
-                        row.set_selected(is_sel);
-                        // Icona de aviso á esquerda; ID á dereita (números aliñados).
-                        row.col(|ui| {
-                            pad_cela(ui);
-                            // Icona de aviso á esquerda; ID á dereita. Faise nun único
-                            // `right_to_left` (centrado en vertical coma o resto de celas)
-                            // para que o texto do ID quede á mesma altura; o aviso métese
-                            // ao final (esquerda) cun `left_to_right` que ocupa o resto.
-                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                ui.label(&r.id);
-                                if r.participante_unico {
-                                    ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                                        ui.label(RichText::new("⚠").color(aviso))
-                                            .on_hover_text("Un só participante presentado");
-                                    });
-                                }
-                            });
+                    row.set_selected(is_sel);
+                    // Icona de aviso á esquerda; ID á dereita (números aliñados).
+                    row.col(|ui| {
+                        pad_cela(ui);
+                        // Icona de aviso á esquerda; ID á dereita. Faise nun único
+                        // `right_to_left` (centrado en vertical coma o resto de celas)
+                        // para que o texto do ID quede á mesma altura; o aviso métese
+                        // ao final (esquerda) cun `left_to_right` que ocupa o resto.
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            ui.label(&r.id);
+                            if r.participante_unico {
+                                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                                    ui.label(RichText::new("⚠").color(aviso))
+                                        .on_hover_text("Un só participante presentado");
+                                });
+                            }
                         });
-                        row.col(|ui| {
-                            pad_cela(ui);
-                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                ui.label(&r.publicacion);
-                            });
+                    });
+                    row.col(|ui| {
+                        pad_cela(ui);
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            ui.label(&r.publicacion);
                         });
-                        row.col(|ui| {
-                            pad_cela(ui);
-                            ui.label(&r.asunto);
+                    });
+                    row.col(|ui| {
+                        pad_cela(ui);
+                        ui.label(&r.asunto);
+                    });
+                    row.col(|ui| {
+                        pad_cela(ui);
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            ui.label(&r.importe_txt);
                         });
-                        row.col(|ui| {
-                            pad_cela(ui);
-                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                ui.label(&r.importe_txt);
-                            });
-                        });
-                        row.col(|ui| {
-                            pad_cela(ui);
+                    });
+                    // Columna 5: Estado (licitacións) ou NIF (menores).
+                    row.col(|ui| {
+                        pad_cela(ui);
+                        if menor {
+                            ui.label(&r.nif);
+                        } else {
                             ui.label(&r.estado);
-                        });
-                        row.col(|ui| {
-                            pad_cela(ui);
-                            ui.label(&r.organismo);
-                        });
-                        row.col(|ui| {
-                            pad_cela(ui);
-                            ui.label(&r.adxudicatario);
-                        });
-                        row.col(|ui| {
-                            pad_cela(ui);
+                        }
+                    });
+                    row.col(|ui| {
+                        pad_cela(ui);
+                        ui.label(&r.organismo);
+                    });
+                    row.col(|ui| {
+                        pad_cela(ui);
+                        ui.label(&r.adxudicatario);
+                    });
+                    // Columna 8: Imp. resolución (licitacións) ou Duración (menores).
+                    row.col(|ui| {
+                        pad_cela(ui);
+                        if menor {
+                            ui.label(&r.duracion);
+                        } else {
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                 ui.label(&r.importe_resolucion_txt);
                             });
-                        });
-                        let resp = row.response();
-                        resp.clone().on_hover_cursor(egui::CursorIcon::PointingHand);
-                        if resp.clicked() {
-                            clicked = Some(r.clone());
                         }
                     });
-                }
+                    let resp = row.response();
+                    resp.clone().on_hover_cursor(egui::CursorIcon::PointingHand);
+                    if resp.clicked() {
+                        clicked = Some(r.clone());
+                    }
+                });
             });
         // Liñas separadoras das columnas `remainder` non redimensionables: de alto
         // completo (da cabeceira ata o fondo do contido, recortado ao viewport), para
@@ -1041,6 +1191,15 @@ impl App {
         for x in sep_xs {
             ui.painter()
                 .vline(x, egui::Rangef::new(table_top, bottom), sep_stroke);
+        }
+        // Cargar os chuncos que faltaban polas filas que se acaban de ver e pedir
+        // un repintado para que aparezan (substituíndo os «…»). Como tras cargalos
+        // quedan na caché, no seguinte fotograma xa non se volven pedir.
+        if !needed.is_empty() {
+            for chunk in needed {
+                self.ensure_chunk_loaded(chunk * CHUNK);
+            }
+            ui.ctx().request_repaint();
         }
         if let Some(col) = clicked_header {
             // Mesma columna: inverte; nova columna: sentido por defecto segundo o tipo
@@ -1080,20 +1239,36 @@ impl App {
 
         ScrollArea::vertical().show(ui, |ui| {
             // Resumo do listado (sempre dispoñible, mesmo sen detalle descargado).
+            let es_menor = self
+                .selected_row
+                .as_ref()
+                .map(|r| r.tipo == TipoContrato::Menor)
+                .unwrap_or(false);
             if let Some(r) = &self.selected_row {
                 if !r.asunto.trim().is_empty() {
                     ui.label(RichText::new(&r.asunto).strong().size(16.0));
                     ui.add_space(8.0);
                 }
+                kv(ui, "Tipo", r.tipo.etiqueta());
                 kv(ui, "ID", &r.id);
                 kv(ui, "Referencia", &r.referencia);
                 kv(ui, "Data de publicación", &r.publicacion);
                 kv(ui, "Estado", &r.estado);
                 kv(ui, "Importe", &r.importe_txt);
                 kv(ui, "Organismo", &r.organismo);
+                // Os contratos menores non teñen páxina de detalle: o adxudicatario,
+                // o NIF e a duración veñen xa no listado.
+                if es_menor {
+                    kv(ui, "Adxudicatario", &r.adxudicatario);
+                    kv(ui, "NIF", &r.nif);
+                    kv(ui, "Duración", &r.duracion);
+                }
             }
 
             match &self.selected_detail {
+                // Os contratos menores non descargan detalle: o resumo de arriba
+                // xa amosa todo o que hai.
+                None if es_menor => {}
                 None => {
                     ui.add_space(10.0);
                     ui.label(
@@ -1106,8 +1281,8 @@ impl App {
                     ui.add_space(12.0);
                     ui.separator();
                     ui.add_space(6.0);
-                    ui.label(RichText::new("Datos do contrato").strong());
-                    ui.add_space(6.0);
+                    section_header(ui, "Datos do contrato");
+                    ui.add_space(8.0);
                     kv(ui, "Obxecto", &d.obxecto);
                     kv(ui, "Tipo de contrato", &d.tipo_contrato);
                     kv(ui, "Tipo de procedemento", &d.tipo_procedemento);
@@ -1136,19 +1311,19 @@ impl App {
 
                     if !resolucions.is_empty() {
                         ui.add_space(12.0);
-                        ui.label(RichText::new("Resolucións / adxudicacións").strong());
+                        section_header(ui, "Resolucións / adxudicacións");
+                        // Só ten sentido referenciar o lote cando hai máis dun.
+                        let varios_lotes = resolucions.len() > 1;
                         for r in resolucions {
                             ui.add_space(6.0);
                             ui.group(|ui| {
                                 ui.set_width(ui.available_width());
-                                ui.label(
-                                    RichText::new(format!(
-                                        "Lote {} · {}",
-                                        if r.lote.is_empty() { "—" } else { &r.lote },
-                                        r.estado_resolucion
-                                    ))
-                                    .strong(),
-                                );
+                                let cabeceira = if varios_lotes && !r.lote.is_empty() {
+                                    format!("Lote {} · {}", r.lote, r.estado_resolucion)
+                                } else {
+                                    r.estado_resolucion.clone()
+                                };
+                                ui.label(RichText::new(cabeceira).strong());
                                 field(ui, "Adxudicatario", &r.adxudicatario);
                                 field(ui, "NIF", &r.nif);
                                 field(ui, "Importe", &r.importe_txt);
@@ -1376,7 +1551,7 @@ impl App {
         // Saltar á ficha do contrato premido: selecciónase e cámbiase á pestana
         // Contratos, que pasará a amosar a vista de detalle no seguinte fotograma.
         if let Some(id) = jump
-            && let Some(row) = self.rows.iter().find(|r| r.id == id).cloned()
+            && let Ok(Some(row)) = self.db.query_local_by_id(&id)
         {
             self.select_contract(row);
             self.tab = Tab::Contratos;
@@ -1598,7 +1773,7 @@ fn render_datoscif(ui: &mut egui::Ui, info: &[AdxDatosCif]) {
     ui.add_space(12.0);
     ui.separator();
     ui.add_space(6.0);
-    ui.label(RichText::new("Quen está detrás (datoscif)").strong());
+    section_header(ui, "Quen está detrás (datoscif)");
     for a in info {
         ui.add_space(6.0);
         ui.group(|ui| {
@@ -1713,7 +1888,7 @@ fn render_utes(ui: &mut egui::Ui, utes: &[UteDetalle]) {
     ui.add_space(12.0);
     ui.separator();
     ui.add_space(6.0);
-    ui.label(RichText::new("Composición da UTE").strong());
+    section_header(ui, "Composición da UTE");
     for u in utes {
         ui.add_space(6.0);
         ui.group(|ui| {
@@ -1766,6 +1941,16 @@ fn text_input(ui: &mut egui::Ui, text: &mut String) -> egui::Response {
     )
 }
 
+/// Cabeceira dunha sección da vista de detalle. Semibold e un chisco maior ca o
+/// corpo, para que se sitúe por riba dos valores na xerarquía visual.
+fn section_header(ui: &mut egui::Ui, text: &str) {
+    ui.label(
+        RichText::new(text)
+            .family(egui::FontFamily::Name("semibold".into()))
+            .size(15.5),
+    );
+}
+
 /// Fila «etiqueta + valor» para a vista de detalle. A etiqueta ocupa unha
 /// columna fixa á esquerda e o valor axústase a varias liñas (wrap) para que o
 /// texto longo non se saia do marco da vista. Omítese se o valor está baleiro.
@@ -1773,28 +1958,58 @@ fn kv(ui: &mut egui::Ui, label: &str, value: &str) {
     if value.trim().is_empty() || value == "_" {
         return;
     }
+    // A etiqueta é unha simple guía: gris atenuada e pequena. O valor conserva
+    // a cor de texto plena e peso medio, de xeito que destaca sobre a etiqueta.
+    let muted = crate::theme::label_muted(ui.visuals().dark_mode);
     ui.horizontal_top(|ui| {
+        // Etiqueta aliñada á dereita contra unha canle central: así os valores
+        // arrincan todos na mesma columna e fórmase unha liña vertical limpa.
         ui.allocate_ui_with_layout(
-            egui::vec2(180.0, 0.0),
-            Layout::left_to_right(Align::TOP),
-            |ui| ui.label(RichText::new(label).strong()),
+            egui::vec2(170.0, 0.0),
+            Layout::right_to_left(Align::TOP),
+            |ui| {
+                ui.add(egui::Label::new(RichText::new(label).color(muted).size(12.5)).wrap());
+            },
         );
+        ui.add_space(12.0);
         // `wrap()` fai que o valor se reparta en varias liñas dentro do ancho
         // restante en lugar de desbordar a vista.
-        ui.add(egui::Label::new(value).wrap());
+        ui.add(
+            egui::Label::new(RichText::new(value).family(egui::FontFamily::Name("medium".into())))
+                .wrap(),
+        );
     });
-    ui.add_space(4.0);
+    ui.add_space(7.0);
 }
 
-/// Mostra unha etiqueta + valor se o valor non está baleiro.
+/// Mostra unha etiqueta + valor se o valor non está baleiro (variante en liña,
+/// para campos dentro dunha tarxeta). Mesma xerarquía visual ca `kv`: etiqueta
+/// gris atenuada, valor en cor plena.
 fn field(ui: &mut egui::Ui, label: &str, value: &str) {
     if value.trim().is_empty() || value == "_" {
         return;
     }
-    ui.horizontal_wrapped(|ui| {
-        ui.label(RichText::new(format!("{label}: ")).strong().small());
-        ui.label(RichText::new(value).small());
+    let muted = crate::theme::label_muted(ui.visuals().dark_mode);
+    ui.horizontal_top(|ui| {
+        // Mesma canle ca `kv`, máis estreita por estar dentro dunha tarxeta.
+        ui.allocate_ui_with_layout(
+            egui::vec2(110.0, 0.0),
+            Layout::right_to_left(Align::TOP),
+            |ui| {
+                ui.add(egui::Label::new(RichText::new(label).color(muted).small()).wrap());
+            },
+        );
+        ui.add_space(10.0);
+        ui.add(
+            egui::Label::new(
+                RichText::new(value)
+                    .family(egui::FontFamily::Name("medium".into()))
+                    .small(),
+            )
+            .wrap(),
+        );
     });
+    ui.add_space(3.0);
 }
 
 /// Dropdown de anos (descendente, dende o ano actual) cunha opción "(todos)".

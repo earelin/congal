@@ -31,8 +31,8 @@ Reproduce exactamente o pipeline de GitHub Actions (`.github/workflows/ci.yml`):
 comprobación falla, arránxaa antes de empuxar para non deixar o CI en vermello.
 
 The `live_end_to_end` test (in `src/sync.rs`) is `#[ignore]` by default because it requires
-network access and exercises a full search → detail → DB → ODS export cycle against a
-known contract id.
+network access and exercises the full cycle against the real server: licitacións API → detail →
+contratos menores (date-window iteration) → DB → local query.
 
 ## Architecture
 
@@ -43,8 +43,11 @@ The data flow is: **GUI → Worker thread → scraper/sync/db → events back to
   e.g. `~/.local/share/congal/contratos.sqlite`) and `system_dark()`.
 
 - **`app.rs`** — all egui UI, single `App` struct holding the full UI state. Import runs from a
-  modal dialog; the main view has three tabs: `Contratos` (local listing + contract detail),
-  `Relacions` (tramas) and `Revision` (manual review queue: candidate-based cases plus a
+  modal dialog (pick **one organismo** + a **year**). The main view has three tabs: `Contratos`
+  (local listing + contract detail) split into **two sub-tabs** — `Licitacións` and `Contratos
+  menores` (`sub_tab: TipoContrato`, drives `LocalFilters.tipo`; the menores table swaps the
+  Estado/Imp.resolución columns for NIF/Duración) — plus `Relacions` (tramas) and `Revision`
+  (manual review queue: candidate-based cases plus a
   collapsible "sen correspondencia" section, each with an **assisted live datoscif search** —
   `Command::SearchDatoscif` → `Event::DatoscifResults` — to find and link a match by hand). The
   UI **never blocks on I/O**: it sends `Command`s to the worker and drains `Event`s each frame.
@@ -54,10 +57,15 @@ The data flow is: **GUI → Worker thread → scraper/sync/db → events back to
   in, `Event` out) plus an `Arc<AtomicBool>` cancel flag. Long operations report progress
   via `Event::SyncProgress` and call `ctx.request_repaint()` to wake the UI.
 
-- **`sync.rs`** — incremental sync logic. After a search, contracts whose stored state is
-  **terminal** (`is_estado_terminal`, e.g. formalizado/deserto/anulado) are skipped; only
-  new or still-in-progress contracts get their detail re-downloaded. A `THROTTLE`
-  (350 ms) is applied between detail requests; honours the cancel flag.
+- **`sync.rs`** — per-organismo import (`Command::Import(ImportParams{org_id,org_nome,ano})` →
+  `run_import`). Fetches the organismo's **licitacións of the chosen year** via
+  `scraper::search_licitaciones` (resultadoIndex, server-side `OR`+`YEAR` filter — the perfil API
+  has NO year filter), then for the **new or still-in-progress** ones (stored state not
+  `is_estado_terminal`, e.g. formalizado/deserto/anulado) re-downloads the detail
+  (`scraper::fetch_detail`). Then fetches the **contratos menores** of the same year (perfil API).
+  A `THROTTLE` (350 ms) between detail requests; honours the cancel flag. Imports accumulate (you
+  add organismos over time); the listing scopes to one organismo via the existing organismo
+  filter (empty = all). Both sources store `cod_organismo` = the **organoL id** (`org_id`).
 
 - **`enrich.rs`** — `Command::Enrich(EnrichMode)` flow (manual "Importar relacións" button).
   Two modes: `Novos` (process each adxudicatario not yet in `adxudicatario_match`) and
@@ -85,8 +93,17 @@ The data flow is: **GUI → Worker thread → scraper/sync/db → events back to
 - **`scraper/`** — HTTP client and parsing, one concern per file:
   - `mod.rs` — `Client` (cookie store + session priming on the portal), and the shared
     `decode_bytes` (the site is ISO-8859-1 / Windows-1252) and `clean_text` helpers.
-  - `search.rs` — `POST resultadoIndex.jsp`; the server returns ALL results in a hidden
-    JSON array (`#resSearch`), the web paginates client-side. Returns `ContractSummary`.
+  - `search.rs` — `search_licitaciones`: `POST resultadoIndex.jsp` (HTML, ISO-8859-1) filtered by
+    `OR` (organismo) + `YEAR`, parses the hidden `#resSearch` JSON into `ContractSummary`
+    (tipo=licitacion), overriding `cod_organismo`/`organismo` with the import's `org_id`/`org_nome`
+    so both contract types share the same organismo id.
+  - `organismo.rs` — the **JSON API** of an organismo's "perfil do contratante" (UTF-8, parsed
+    directly with `serde_json` — NOT `decode_bytes`): `fetch_contratos_menores` (GET
+    `api/v1/organismos/{id}/contratosmenores/table`, `length`≤100) returns `MenorRow` — that
+    endpoint only accepts short **date windows** (≤~3 months, longer → HTTP 500), so it iterates
+    ≤80-day windows over the year, dedup by id. The `{id}` is the `organoL` dropdown value,
+    already parsed by `options.rs`. Menores carry their adxudicatario (nome + NIF) in the listing,
+    so they need **no detail page**. (`parse_ano` validates the year.)
   - `detail.rs` — `GET licitacion?OP=50&N=<id>`; parses the detail page into
     `ContractDetail` + per-lot `Resolucion` rows. The adxudicatario's **NIF/CIF** is not in the
     main resolution table; it lives in the hidden licitadores/formalización tables (still present
@@ -115,7 +132,11 @@ The data flow is: **GUI → Worker thread → scraper/sync/db → events back to
     across companies; ownership shows up as a cargo (`Socio Unico`/`Socio`).
 
 - **`db.rs`** — SQLite schema and queries (`Db`). Tables: `contracts` (listing, normalised:
-  only `importe_num`, dates stored as ISO 8601 text, `cod_organismo` + `cod_estado` FKs),
+  a `tipo` column `'licitacion'`|`'menor'`, only `importe_num`, dates as ISO 8601 text,
+  `cod_organismo` + `cod_estado` FKs, plus `duracion` used only by menores; `cod_organismo` is
+  the **API/organoL id**, NOT the old listado `codOrganismo`. Menores store their adxudicatario as
+  one `contract_resolucion` row via `upsert_menores`, so the aggregation and relations work the
+  same for both types),
   `organismos` (`cod_organismo` → `nome`, the organism name lives here, loaded via JOIN),
   `estados` (`cod_estado` → `nome`; the server only sends the estado text, so `cod_estado`
   is a surrogate key auto-assigned on first insert of each name; loaded via JOIN),
@@ -142,17 +163,22 @@ The data flow is: **GUI → Worker thread → scraper/sync/db → events back to
   WAL mode, foreign keys on. The project is a **prototype**: no schema versioning/migration —
   delete the local `.sqlite` to apply schema changes. `upsert_*` are the write paths;
   `query_local` powers the offline Local tab (one row per contract, lotes aggregated;
-  importe/date/organismo are derived for display), including search by adxudicatario. It also
+  importe/date/organismo are derived for display), including search by adxudicatario. The
+  listing loads **progressively**: the UI calls `count_local` for the total and
+  `query_local_page(offset,limit)` to fetch 8000-row chunks on demand as the virtual table
+  scrolls (cached per chunk in `App.row_cache`); `query_local_by_id` fetches a single row for
+  jump-to-contract. `query_local` (unbounded) still backs the ODS export. It also
   flags `LocalRow.participante_unico` (`MAX(participacion) == 1`) so the listing marks single-bidder
   contracts with a ⚠ icon (a possible irregularity signal). The listing is sortable by clicking a
   column header: `LocalFilters.sort_col`/`sort_asc` drive a dynamic `ORDER BY`
   (`SortColumn::order_sql`, fixed expressions; numbers/dates sort by their stored numeric/ISO value).
 
-- **`model.rs`** — all domain types and pure helpers. Notable: `EstadoGroup` maps the four
-  UI status checkboxes to the numeric `ESTADO` codes the server expects; `parse_importe` /
-  `format_importe` convert between Galician-formatted amounts (`1.000.000,00 €`) and `f64`;
-  `parse_data` / `format_data_gl` convert between portal dates, ISO 8601, and `DD/MM/YYYY`
-  display; `is_estado_terminal` drives the incremental-sync skip decision. The datoscif
+- **`model.rs`** — all domain types and pure helpers. Notable: `TipoContrato` (`Licitacion`/
+  `Menor`); `ContractSummary` (contract-write DTO, also produced by `search.rs`); `MenorRow`
+  (serde row from the menores JSON API); `ImportParams` (organismo + year); `parse_importe` / `format_importe` convert between Galician-formatted
+  amounts (`1.000.000,00 €`) and `f64`; `parse_data` / `format_data_gl` convert between portal
+  dates, ISO 8601, and `DD/MM/YYYY` display; `is_estado_terminal` drives the incremental-import
+  skip decision. The datoscif
   matching helpers live here too: `company_key`/`company_core`/`strip_legal_suffix`
   (normalise names, drop SL/SA… suffixes), `search_variants` (reorders person names
   «nome apelido1 apelido2» → «apelido1 apelido2 nome» for datoscif's substring search),
