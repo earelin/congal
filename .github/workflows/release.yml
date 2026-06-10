@@ -1,0 +1,112 @@
+# .github/workflows/release.yml
+#
+# Compila congal para Linux, macOS (Intel + Apple Silicon) e Windows cada vez
+# que se empuxa unha etiqueta de versión, e anexa os arquivos a unha Release de
+# GitHub.
+#
+# A etiqueta de git é a fonte de verdade da versión:
+#   git tag v0.2.0 && git push origin v0.2.0   ->  release "v0.2.0"
+#   git tag v0.2.0-rc.1 && git push ...         ->  pre-release (marcada como prerelease)
+#
+# Trunk mantén unha versión de desenvolvemento en Cargo.toml (p.ex.
+# version = "0.2.0-dev"); este job sobrescríbea co número da etiqueta antes de
+# compilar, para que o binario publicado informe da versión correcta e as
+# compilacións de trunk sigan claramente como "-dev".
+
+name: release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+*"   # v1.2.3, v1.2.3-rc.1, ...
+
+permissions:
+  contents: write                 # necesario para crear/actualizar a Release
+
+env:
+  BINARY: congal
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+          - target: x86_64-apple-darwin     # Intel
+            os: macos-13
+          - target: aarch64-apple-darwin    # Apple Silicon
+            os: macos-14
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Derivar a versión da etiqueta
+        shell: bash
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      # Dependencias do sistema: GTK3 (rfd, diálogos de ficheiro) e X11/xkb
+      # (eframe/winit). As mesmas que en .github/workflows/ci.yml.
+      - name: Instalar dependencias do sistema (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgtk-3-dev \
+            libxkbcommon-dev \
+            libxcb-render0-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev
+
+      # Gravar a versión da etiqueta en Cargo.toml para que `congal --version`
+      # sexa correcta. cargo-edit mantén Cargo.lock sincronizado, así que a
+      # compilación con --locked de abaixo non falla.
+      - name: Instalar cargo-edit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-edit
+      - name: Gravar a versión da release
+        shell: bash
+        run: cargo set-version "$VERSION"
+
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Empaquetar
+        id: package
+        shell: bash
+        run: |
+          dist="${BINARY}-${VERSION}-${{ matrix.target }}"
+          mkdir "$dist"
+          cp README.md "$dist"/ 2>/dev/null || true
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp "target/${{ matrix.target }}/release/${BINARY}.exe" "$dist"/
+            7z a "${dist}.zip" "$dist" >/dev/null
+            echo "asset=${dist}.zip" >> "$GITHUB_OUTPUT"
+          else
+            cp "target/${{ matrix.target }}/release/${BINARY}" "$dist"/
+            tar -czf "${dist}.tar.gz" "$dist"
+            echo "asset=${dist}.tar.gz" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Subir á release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: ${{ steps.package.outputs.asset }}
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
