@@ -225,9 +225,15 @@ pub(crate) fn parse_detail(id: &str, html: &str) -> (ContractDetail, Vec<Resoluc
         } else if l.contains("tipo de contrato") {
             set(&mut d.tipo_contrato, &value);
         } else if l.contains("orzamento base") {
-            set(&mut d.orzamento_base, &value);
+            // Valor con IVE; o texto trae «… con IVE», quedámonos só co número.
+            if d.orzamento_base.is_none() {
+                d.orzamento_base = parse_importe(&value);
+            }
         } else if l.contains("valor estimado") {
-            set(&mut d.valor_estimado, &value);
+            // Valor sen IVE; o texto trae «… sen IVE», quedámonos só co número.
+            if d.valor_estimado.is_none() {
+                d.valor_estimado = parse_importe(&value);
+            }
         } else if l.contains("lotes") {
             set(&mut d.num_lotes, &value);
         } else if l.contains("sistema de contratación") {
@@ -504,7 +510,8 @@ mod tests {
 
         assert_eq!(d.referencia, "2024-142");
         assert!(d.tipo_contrato.to_lowercase().contains("serviz"));
-        assert!(!d.orzamento_base.is_empty());
+        assert_eq!(d.orzamento_base, Some(1_000_000.00));
+        assert_eq!(d.valor_estimado, Some(826_446.28));
         assert!(
             res.iter().all(|r| !r.adxudicatario.contains("S.L.")),
             "non debería haber adxudicatario real nun contrato anulado"

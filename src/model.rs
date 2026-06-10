@@ -112,8 +112,10 @@ pub struct ContractDetail {
     pub tipo_tramitacion: String,
     pub tipo_procedemento: String,
     pub tipo_contrato: String,
-    pub orzamento_base: String,
-    pub valor_estimado: String,
+    /// Orzamento base de licitación, **con IVE** (só o valor numérico).
+    pub orzamento_base: Option<f64>,
+    /// Valor estimado do contrato, **sen IVE** (só o valor numérico).
+    pub valor_estimado: Option<f64>,
     pub num_lotes: String,
     pub sistema_contratacion: String,
     pub observacions: String,

@@ -150,15 +150,34 @@ impl Db {
                 actualizado_en    TEXT    -- ISO 8601 'YYYY-MM-DD HH:MM:SS'
             );
 
+            -- Tipos de tramitación, procedemento e contrato, normalizados en táboas
+            -- propias e referenciados desde `contract_detail` polo seu código. Coma
+            -- nos `estados`, o servidor só devolve o texto, así que o código é unha
+            -- clave subrogada que se asigna soa ao inserir un nome novo.
+            CREATE TABLE IF NOT EXISTS tipos_tramitacion (
+                cod_tipo_tramitacion INTEGER PRIMARY KEY,
+                nome                 TEXT NOT NULL UNIQUE
+            );
+
+            CREATE TABLE IF NOT EXISTS tipos_procedemento (
+                cod_tipo_procedemento INTEGER PRIMARY KEY,
+                nome                  TEXT NOT NULL UNIQUE
+            );
+
+            CREATE TABLE IF NOT EXISTS tipos_contrato (
+                cod_tipo_contrato INTEGER PRIMARY KEY,
+                nome              TEXT NOT NULL UNIQUE
+            );
+
             CREATE TABLE IF NOT EXISTS contract_detail (
                 contract_id          TEXT PRIMARY KEY REFERENCES contracts(id) ON DELETE CASCADE,
                 referencia           TEXT,
                 obxecto              TEXT,
-                tipo_tramitacion     TEXT,
-                tipo_procedemento    TEXT,
-                tipo_contrato        TEXT,
-                orzamento_base       TEXT,
-                valor_estimado       TEXT,
+                cod_tipo_tramitacion  INTEGER REFERENCES tipos_tramitacion(cod_tipo_tramitacion),
+                cod_tipo_procedemento INTEGER REFERENCES tipos_procedemento(cod_tipo_procedemento),
+                cod_tipo_contrato     INTEGER REFERENCES tipos_contrato(cod_tipo_contrato),
+                orzamento_base       REAL,   -- con IVE (só o valor numérico)
+                valor_estimado       REAL,   -- sen IVE (só o valor numérico)
                 num_lotes            TEXT,
                 sistema_contratacion TEXT,
                 observacions         TEXT,
@@ -170,15 +189,22 @@ impl Db {
                 extra_json           TEXT
             );
 
+            -- Estados da resolución, normalizados nunha táboa propia (coma os
+            -- `estados` do contrato): o servidor só dá o texto, así que o código
+            -- é unha clave subrogada asignada soa ao inserir un nome novo.
+            CREATE TABLE IF NOT EXISTS estados_resolucion (
+                cod_estado_resolucion INTEGER PRIMARY KEY,
+                nome                  TEXT NOT NULL UNIQUE
+            );
+
             CREATE TABLE IF NOT EXISTS contract_resolucion (
                 contract_id            TEXT NOT NULL REFERENCES contracts(id) ON DELETE CASCADE,
                 lote                   TEXT,
                 participacion          TEXT,
-                estado_resolucion      TEXT,
+                cod_estado_resolucion  INTEGER REFERENCES estados_resolucion(cod_estado_resolucion),
                 adxudicatario          TEXT,
                 nif                    TEXT,
                 importe_resolucion_num REAL,
-                importe_resolucion_txt TEXT,
                 data_difusion          TEXT,
                 prazo_execucion        TEXT,
                 recurso                TEXT
@@ -363,18 +389,42 @@ impl Db {
             "INSERT OR IGNORE INTO contracts(id) VALUES(?1)",
             params![d.contract_id],
         )?;
+        // Garantir que existen os nomes dos tipos (o código asígnase soa); os
+        // baleiros ignóranse e a subconsulta resólveos a NULL.
+        for (sql, nome) in [
+            (
+                "INSERT OR IGNORE INTO tipos_tramitacion (nome) VALUES (?1)",
+                d.tipo_tramitacion.trim(),
+            ),
+            (
+                "INSERT OR IGNORE INTO tipos_procedemento (nome) VALUES (?1)",
+                d.tipo_procedemento.trim(),
+            ),
+            (
+                "INSERT OR IGNORE INTO tipos_contrato (nome) VALUES (?1)",
+                d.tipo_contrato.trim(),
+            ),
+        ] {
+            if !nome.is_empty() {
+                tx.execute(sql, params![nome])?;
+            }
+        }
         tx.execute(
             r#"INSERT INTO contract_detail
-                (contract_id, referencia, obxecto, tipo_tramitacion, tipo_procedemento,
-                 tipo_contrato, orzamento_base, valor_estimado, num_lotes,
+                (contract_id, referencia, obxecto, cod_tipo_tramitacion, cod_tipo_procedemento,
+                 cod_tipo_contrato, orzamento_base, valor_estimado, num_lotes,
                  sistema_contratacion, observacions, data_difusion, sara, centralizada,
                  lei_aplicacion, enlace_resolucion, extra_json)
-               VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)
+               VALUES (?1,?2,?3,
+                 (SELECT cod_tipo_tramitacion FROM tipos_tramitacion WHERE nome=?4),
+                 (SELECT cod_tipo_procedemento FROM tipos_procedemento WHERE nome=?5),
+                 (SELECT cod_tipo_contrato FROM tipos_contrato WHERE nome=?6),
+                 ?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)
                ON CONFLICT(contract_id) DO UPDATE SET
                  referencia=excluded.referencia, obxecto=excluded.obxecto,
-                 tipo_tramitacion=excluded.tipo_tramitacion,
-                 tipo_procedemento=excluded.tipo_procedemento,
-                 tipo_contrato=excluded.tipo_contrato,
+                 cod_tipo_tramitacion=excluded.cod_tipo_tramitacion,
+                 cod_tipo_procedemento=excluded.cod_tipo_procedemento,
+                 cod_tipo_contrato=excluded.cod_tipo_contrato,
                  orzamento_base=excluded.orzamento_base,
                  valor_estimado=excluded.valor_estimado, num_lotes=excluded.num_lotes,
                  sistema_contratacion=excluded.sistema_contratacion,
@@ -386,9 +436,9 @@ impl Db {
                 d.contract_id,
                 d.referencia,
                 d.obxecto,
-                d.tipo_tramitacion,
-                d.tipo_procedemento,
-                d.tipo_contrato,
+                d.tipo_tramitacion.trim(),
+                d.tipo_procedemento.trim(),
+                d.tipo_contrato.trim(),
                 d.orzamento_base,
                 d.valor_estimado,
                 d.num_lotes,
@@ -407,23 +457,35 @@ impl Db {
             params![d.contract_id],
         )?;
         {
+            // Garantir que existe o nome do estado de resolución (o código
+            // asígnase soa); os baleiros ignóranse e a subconsulta resólveos a NULL.
+            let mut est_stmt =
+                tx.prepare("INSERT OR IGNORE INTO estados_resolucion (nome) VALUES (?1)")?;
+            for r in resolucions {
+                if !r.estado_resolucion.trim().is_empty() {
+                    est_stmt.execute(params![r.estado_resolucion.trim()])?;
+                }
+            }
+
+            // `importe_resolucion_txt` non se garda: é só o renderizado de
+            // `importe_resolucion_num` (derívase ao cargar con `format_importe`).
             let mut stmt = tx.prepare(
                 r#"INSERT INTO contract_resolucion
-                    (contract_id, lote, participacion, estado_resolucion, adxudicatario,
-                     nif, importe_resolucion_num, importe_resolucion_txt, data_difusion,
-                     prazo_execucion, recurso)
-                   VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)"#,
+                    (contract_id, lote, participacion, cod_estado_resolucion, adxudicatario,
+                     nif, importe_resolucion_num, data_difusion, prazo_execucion, recurso)
+                   VALUES (?1,?2,?3,
+                     (SELECT cod_estado_resolucion FROM estados_resolucion WHERE nome=?4),
+                     ?5,?6,?7,?8,?9,?10)"#,
             )?;
             for r in resolucions {
                 stmt.execute(params![
                     d.contract_id,
                     r.lote,
                     r.participacion,
-                    r.estado_resolucion,
+                    r.estado_resolucion.trim(),
                     r.adxudicatario,
                     r.nif,
                     r.importe_num,
-                    r.importe_txt,
                     r.data_difusion,
                     r.prazo_execucion,
                     r.recurso,
@@ -546,11 +608,16 @@ impl Db {
         let detail = self
             .conn
             .query_row(
-                r#"SELECT referencia, obxecto, tipo_tramitacion, tipo_procedemento,
-                          tipo_contrato, orzamento_base, valor_estimado, num_lotes,
-                          sistema_contratacion, observacions, data_difusion, sara,
-                          centralizada, lei_aplicacion, enlace_resolucion, extra_json
-                   FROM contract_detail WHERE contract_id = ?1"#,
+                r#"SELECT d.referencia, d.obxecto,
+                          COALESCE(tt.nome,''), COALESCE(tp.nome,''), COALESCE(tc.nome,''),
+                          d.orzamento_base, d.valor_estimado, d.num_lotes,
+                          d.sistema_contratacion, d.observacions, d.data_difusion, d.sara,
+                          d.centralizada, d.lei_aplicacion, d.enlace_resolucion, d.extra_json
+                   FROM contract_detail d
+                   LEFT JOIN tipos_tramitacion  tt ON tt.cod_tipo_tramitacion  = d.cod_tipo_tramitacion
+                   LEFT JOIN tipos_procedemento tp ON tp.cod_tipo_procedemento = d.cod_tipo_procedemento
+                   LEFT JOIN tipos_contrato     tc ON tc.cod_tipo_contrato     = d.cod_tipo_contrato
+                   WHERE d.contract_id = ?1"#,
                 params![id],
                 |row| {
                     let extra_json: String = row.get(15)?;
@@ -582,23 +649,29 @@ impl Db {
         };
 
         let mut stmt = self.conn.prepare(
-            r#"SELECT lote, participacion, estado_resolucion, adxudicatario, COALESCE(nif,''),
-                      importe_resolucion_num, importe_resolucion_txt, data_difusion,
-                      prazo_execucion, recurso
-               FROM contract_resolucion WHERE contract_id = ?1"#,
+            r#"SELECT r.lote, r.participacion, COALESCE(er.nome,''), r.adxudicatario,
+                      COALESCE(r.nif,''), r.importe_resolucion_num, r.data_difusion,
+                      r.prazo_execucion, r.recurso
+               FROM contract_resolucion r
+               LEFT JOIN estados_resolucion er
+                      ON er.cod_estado_resolucion = r.cod_estado_resolucion
+               WHERE r.contract_id = ?1"#,
         )?;
         let res = stmt.query_map(params![id], |row| {
+            let importe_num: Option<f64> = row.get(5)?;
             Ok(Resolucion {
                 lote: row.get(0)?,
                 participacion: row.get(1)?,
                 estado_resolucion: row.get(2)?,
                 adxudicatario: row.get(3)?,
                 nif: row.get(4)?,
-                importe_num: row.get(5)?,
-                importe_txt: row.get(6)?,
-                data_difusion: row.get(7)?,
-                prazo_execucion: row.get(8)?,
-                recurso: row.get(9)?,
+                importe_num,
+                // `importe_txt` é o renderizado de `importe_num` (a columna de
+                // texto eliminouse da táboa).
+                importe_txt: importe_num.map(format_importe).unwrap_or_default(),
+                data_difusion: row.get(6)?,
+                prazo_execucion: row.get(7)?,
+                recurso: row.get(8)?,
             })
         })?;
         let mut resolucions = Vec::new();

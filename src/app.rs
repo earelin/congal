@@ -1112,8 +1112,18 @@ impl App {
                     kv(ui, "Tipo de contrato", &d.tipo_contrato);
                     kv(ui, "Tipo de procedemento", &d.tipo_procedemento);
                     kv(ui, "Tipo de tramitación", &d.tipo_tramitacion);
-                    kv(ui, "Orzamento base", &d.orzamento_base);
-                    kv(ui, "Valor estimado", &d.valor_estimado);
+                    // Orzamento base é con IVE e valor estimado sen el; o
+                    // matiz amósase na etiqueta xa que só gardamos o número.
+                    kv(
+                        ui,
+                        "Orzamento base (con IVE)",
+                        &d.orzamento_base.map(format_importe).unwrap_or_default(),
+                    );
+                    kv(
+                        ui,
+                        "Valor estimado (sen IVE)",
+                        &d.valor_estimado.map(format_importe).unwrap_or_default(),
+                    );
                     kv(ui, "Nº lotes", &d.num_lotes);
                     kv(ui, "Sistema de contratación", &d.sistema_contratacion);
                     kv(ui, "Data de difusión", &d.data_difusion);
