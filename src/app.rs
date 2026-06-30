@@ -1061,6 +1061,10 @@ impl App {
             return;
         }
 
+        // Empresa premida dentro da ScrollArea (nome de adxudicatario ou membro de
+        // UTE): aplícase despois, fóra do préstamo inmutable de `self`, abrindo a súa
+        // ficha na pestana Empresas.
+        let mut open_emp: Option<(String, String)> = None;
         ScrollArea::vertical().show(ui, |ui| {
             // Resumo do listado (sempre dispoñible, mesmo sen detalle descargado).
             let es_menor = self
@@ -1083,7 +1087,9 @@ impl App {
                 // Os contratos menores non teñen páxina de detalle: o adxudicatario,
                 // o NIF e a duración veñen xa no listado.
                 if es_menor {
-                    kv(ui, "Adxudicatario", &r.adxudicatario);
+                    if kv_link(ui, "Adxudicatario", &r.adxudicatario) {
+                        open_emp = Some((r.nif.clone(), r.adxudicatario.clone()));
+                    }
                     kv(ui, "NIF", &r.nif);
                     kv(ui, "Duración", &r.duracion);
                 }
@@ -1148,7 +1154,9 @@ impl App {
                                     r.estado_resolucion.clone()
                                 };
                                 ui.label(RichText::new(cabeceira).strong());
-                                field(ui, "Adxudicatario", &r.adxudicatario);
+                                if field_link(ui, "Adxudicatario", &r.adxudicatario) {
+                                    open_emp = Some((r.nif.clone(), r.adxudicatario.clone()));
+                                }
                                 field(ui, "NIF", &r.nif);
                                 field(ui, "Importe", &r.importe_txt);
                                 field(ui, "Data difusión", &r.data_difusion);
@@ -1168,9 +1176,18 @@ impl App {
                 }
             }
 
-            // Composición das UTE adxudicatarias (empresas membro).
-            render_utes(ui, &self.selected_utes);
+            // Composición das UTE adxudicatarias (empresas membro): cada membro é
+            // clicable e abre a súa ficha.
+            if let Some(emp) = render_utes(ui, &self.selected_utes) {
+                open_emp = Some(emp);
+            }
         });
+
+        // Abrir a ficha da empresa premida e cambiar á pestana Empresas.
+        if let Some((nif, nome)) = open_emp {
+            self.open_empresa(&nif, &nome);
+            self.tab = Tab::Empresas;
+        }
     }
 
     /// Vista de empresas: listado de todas as razóns sociais adxudicatarias na
@@ -1722,11 +1739,13 @@ fn pad_cela(ui: &mut egui::Ui) {
 }
 
 /// Renderiza, na ficha do contrato, a composición das UTE adxudicatarias: cada
-/// empresa membro co seu CIF.
-fn render_utes(ui: &mut egui::Ui, utes: &[UteDetalle]) {
+/// empresa membro co seu CIF. Os nomes das empresas son clicables e abren a súa
+/// ficha; devolve `(CIF, nome)` da empresa premida, se a hai.
+fn render_utes(ui: &mut egui::Ui, utes: &[UteDetalle]) -> Option<(String, String)> {
     if utes.is_empty() {
-        return;
+        return None;
     }
+    let mut clicked: Option<(String, String)> = None;
     ui.add_space(12.0);
     ui.separator();
     ui.add_space(6.0);
@@ -1740,7 +1759,20 @@ fn render_utes(ui: &mut egui::Ui, utes: &[UteDetalle]) {
                 ui.add_space(4.0);
                 ui.horizontal_wrapped(|ui| {
                     ui.label("🏢");
-                    ui.label(RichText::new(&m.nome).strong());
+                    let resp = ui.add(
+                        egui::Label::new(
+                            RichText::new(&m.nome)
+                                .strong()
+                                .color(ui.visuals().hyperlink_color),
+                        )
+                        .sense(egui::Sense::click()),
+                    );
+                    if resp.hovered() {
+                        resp.clone().on_hover_cursor(egui::CursorIcon::PointingHand);
+                    }
+                    if resp.clicked() {
+                        clicked = Some((m.cif.clone(), m.nome.clone()));
+                    }
                     if !m.cif.is_empty() {
                         ui.label(
                             RichText::new(format!("· {}", m.cif))
@@ -1753,6 +1785,7 @@ fn render_utes(ui: &mut egui::Ui, utes: &[UteDetalle]) {
             }
         });
     }
+    clicked
 }
 
 /// Renderiza unha **táboa** de contratos da ficha de empresa (unha fila por
@@ -1913,6 +1946,76 @@ fn kv(ui: &mut egui::Ui, label: &str, value: &str) {
         );
     });
     ui.add_space(7.0);
+}
+
+/// Variante de [`kv`] na que o valor é un vínculo clicable (cor de ligazón e
+/// cursor de man): devolve `true` no fotograma en que se preme. Úsase para os
+/// nomes de empresa, que levan á ficha da empresa.
+fn kv_link(ui: &mut egui::Ui, label: &str, value: &str) -> bool {
+    if value.trim().is_empty() || value == "_" {
+        return false;
+    }
+    let muted = crate::theme::label_muted(ui.visuals().dark_mode);
+    let mut clicked = false;
+    ui.horizontal_top(|ui| {
+        ui.allocate_ui_with_layout(
+            egui::vec2(170.0, 0.0),
+            Layout::right_to_left(Align::TOP),
+            |ui| {
+                ui.add(egui::Label::new(RichText::new(label).color(muted).size(12.5)).wrap());
+            },
+        );
+        ui.add_space(12.0);
+        let resp = ui.add(
+            egui::Label::new(
+                RichText::new(value)
+                    .family(egui::FontFamily::Name("medium".into()))
+                    .color(ui.visuals().hyperlink_color),
+            )
+            .sense(egui::Sense::click()),
+        );
+        if resp.hovered() {
+            resp.clone().on_hover_cursor(egui::CursorIcon::PointingHand);
+        }
+        clicked = resp.clicked();
+    });
+    ui.add_space(7.0);
+    clicked
+}
+
+/// Variante de [`field`] na que o valor é un vínculo clicable (cor de ligazón e
+/// cursor de man): devolve `true` no fotograma en que se preme.
+fn field_link(ui: &mut egui::Ui, label: &str, value: &str) -> bool {
+    if value.trim().is_empty() || value == "_" {
+        return false;
+    }
+    let muted = crate::theme::label_muted(ui.visuals().dark_mode);
+    let mut clicked = false;
+    ui.horizontal_top(|ui| {
+        ui.allocate_ui_with_layout(
+            egui::vec2(110.0, 0.0),
+            Layout::right_to_left(Align::TOP),
+            |ui| {
+                ui.add(egui::Label::new(RichText::new(label).color(muted).small()).wrap());
+            },
+        );
+        ui.add_space(10.0);
+        let resp = ui.add(
+            egui::Label::new(
+                RichText::new(value)
+                    .family(egui::FontFamily::Name("medium".into()))
+                    .small()
+                    .color(ui.visuals().hyperlink_color),
+            )
+            .sense(egui::Sense::click()),
+        );
+        if resp.hovered() {
+            resp.clone().on_hover_cursor(egui::CursorIcon::PointingHand);
+        }
+        clicked = resp.clicked();
+    });
+    ui.add_space(3.0);
+    clicked
 }
 
 /// Mostra unha etiqueta + valor se o valor non está baleiro (variante en liña,
