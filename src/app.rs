@@ -63,8 +63,15 @@ pub struct App {
     /// Vista de relacións: grupos (tramas) de razóns sociais interconectadas.
     relacions: Vec<GrupoRelacion>,
     relacions_loaded: bool,
-    /// Vista de empresas: listado de adxudicatarios da busca actual.
-    empresas: Vec<EmpresaContratos>,
+    /// Vista de empresas: nº total de empresas que casan cos filtros actuais
+    /// (tamaño da táboa virtual e do resumo).
+    empresas_total: usize,
+    /// Importe total adxudicado a todas as empresas filtradas (para o resumo);
+    /// vén de `db::empresas_resumo`, non de sumar as filas cargadas en memoria.
+    empresas_importe_total: f64,
+    /// Caché de empresas cargadas por chunco (clave = índice de chunco = fila/`CHUNK`).
+    /// A táboa de empresas carga progresivamente, igual ca a de contratos.
+    empresas_cache: std::collections::HashMap<usize, Vec<EmpresaContratos>>,
     empresas_loaded: bool,
 
     /// Canle pola que o fío do diálogo nativo «Gardar como» devolve o destino
@@ -149,7 +156,9 @@ impl App {
             sub_tab: TipoContrato::Licitacion,
             relacions: Vec::new(),
             relacions_loaded: false,
-            empresas: Vec::new(),
+            empresas_total: 0,
+            empresas_importe_total: 0.0,
+            empresas_cache: std::collections::HashMap::new(),
             empresas_loaded: false,
             export_rx: None,
         };
@@ -315,11 +324,44 @@ impl App {
     }
 
     fn refresh_empresas(&mut self) {
-        self.empresas = self
-            .db
-            .empresas_con_contratos(&self.local)
-            .unwrap_or_default();
+        // Carga progresiva: baleiramos a caché de chuncos e só calculamos o resumo
+        // (nº de empresas e importe total); as filas visibles cárganse baixo demanda
+        // en `empresas_view`.
+        self.empresas_cache.clear();
+        match self.db.empresas_resumo(&self.local) {
+            Ok((n, total)) => {
+                self.empresas_total = n;
+                self.empresas_importe_total = total;
+            }
+            Err(e) => {
+                self.empresas_total = 0;
+                self.empresas_importe_total = 0.0;
+                self.status = format!("⚠ consulta empresas: {e}");
+            }
+        }
         self.empresas_loaded = true;
+    }
+
+    /// Garante que o chunco de empresas que contén `index` está na caché; cárgao da
+    /// BD se non. Análogo a [`Self::ensure_chunk_loaded`] pero para a táboa de empresas.
+    fn ensure_empresas_chunk_loaded(&mut self, index: usize) {
+        let chunk = index / CHUNK;
+        if self.empresas_cache.contains_key(&chunk) {
+            return;
+        }
+        match self
+            .db
+            .query_empresas_page(&self.local, chunk * CHUNK, CHUNK)
+        {
+            Ok(rows) => {
+                self.empresas_cache.insert(chunk, rows);
+            }
+            Err(e) => {
+                // Marcar o chunco como (baleiro) para non reintentar en bucle.
+                self.empresas_cache.insert(chunk, Vec::new());
+                self.status = format!("⚠ consulta empresas: {e}");
+            }
+        }
     }
 }
 
@@ -1139,7 +1181,7 @@ impl App {
         if !self.empresas_loaded {
             self.refresh_empresas();
         }
-        if self.empresas.is_empty() {
+        if self.empresas_total == 0 {
             ui.add_space(10.0);
             ui.label(
                 RichText::new("Non hai empresas adxudicatarias na busca actual.")
@@ -1149,20 +1191,23 @@ impl App {
             return;
         }
 
-        // Resumo: nº de empresas e importe total adxudicado (suma de todas).
-        let importe_total: f64 = self.empresas.iter().map(|e| e.importe_total).sum();
+        // Resumo: nº de empresas e importe total adxudicado (de `empresas_resumo`,
+        // calculado na BD sobre toda a busca, non sobre as filas cargadas).
         ui.label(
             RichText::new(format!(
                 "{} empresas · {} adxudicado en total",
-                self.empresas.len(),
-                format_importe(importe_total),
+                self.empresas_total,
+                format_importe(self.empresas_importe_total),
             ))
             .small()
             .color(Color32::GRAY),
         );
         ui.add_space(4.0);
 
-        let empresas = &self.empresas;
+        // Carga progresiva por chuncos: a táboa virtual pide só os chuncos visibles.
+        let total = self.empresas_total;
+        let cache = &self.empresas_cache;
+        let mut needed: Vec<usize> = Vec::new();
         // As celas non capturan o clic; texto non seleccionable como na táboa de
         // contratos, para un aspecto coherente.
         ui.style_mut().interaction.selectable_labels = false;
@@ -1196,8 +1241,22 @@ impl App {
                 }
             })
             .body(|body| {
-                body.rows(22.0, empresas.len(), |mut row| {
-                    let e = &empresas[row.index()];
+                body.rows(22.0, total, |mut row| {
+                    let i = row.index();
+                    let chunk = i / CHUNK;
+                    // Fila aínda non cargada: píntase «…» e o seu chunco márcase para pedir.
+                    let Some(e) = cache.get(&chunk).and_then(|rows| rows.get(i % CHUNK)) else {
+                        if !needed.contains(&chunk) {
+                            needed.push(chunk);
+                        }
+                        for _ in 0..4 {
+                            row.col(|ui| {
+                                pad_cela(ui);
+                                ui.label(RichText::new("…").weak());
+                            });
+                        }
+                        return;
+                    };
                     row.col(|ui| {
                         pad_cela(ui);
                         ui.label(&e.nome);
@@ -1220,6 +1279,14 @@ impl App {
                     });
                 });
             });
+
+        // Cargar os chuncos que faltaban e repintar para que enchan o «…».
+        if !needed.is_empty() {
+            for chunk in needed {
+                self.ensure_empresas_chunk_loaded(chunk * CHUNK);
+            }
+            ui.ctx().request_repaint();
+        }
     }
 
     /// Vista de relacións: grupos de razóns sociais que concorreron xuntas nunha
