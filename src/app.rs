@@ -2,13 +2,10 @@
 //! principal, e importación de datos en diálogos modais.
 
 use crate::db::{Db, DbStats, LocalOptions};
-use crate::enrich::EnrichMode;
 use crate::model::{
-    CargoRow, CasoRevision, ContractDetail, DatosCifEntidade, FilterOptions, GrupoRelacion,
-    ImportParams, LocalFilters, LocalRow, Resolucion, SortColumn, Suggestion, TipoContrato,
-    format_data_gl, format_importe,
+    ContractDetail, FilterOptions, GrupoRelacion, ImportParams, LocalFilters, LocalRow, Resolucion,
+    SortColumn, TipoContrato, format_importe,
 };
-use crate::scraper::DATOSCIF_BASE;
 use crate::theme;
 use crate::worker::{Command, Event, Worker};
 use egui::{Align, Color32, Layout, RichText, ScrollArea};
@@ -38,9 +35,6 @@ pub struct App {
     progress: Option<(usize, usize)>,
     /// Título do modal de progreso segundo a operación en curso.
     progress_titulo: &'static str,
-    /// `true` cando a última operación rematada foi unha vinculación/reimportación
-    /// con datoscif; habilita o botón «Reimportar datos das empresas» no resultado.
-    enrich_finished: bool,
     status: String,
     logs: Vec<String>,
     stats: DbStats,
@@ -59,8 +53,6 @@ pub struct App {
     selected_row: Option<LocalRow>,
     /// Detalle descargado do contrato seleccionado, se o hai.
     selected_detail: Option<(ContractDetail, Vec<Resolucion>)>,
-    /// Info de datoscif (entidade + cargos) por adxudicatario do contrato aberto.
-    selected_datoscif: Vec<AdxDatosCif>,
     /// Composición das UTE adxudicatarias do contrato aberto.
     selected_utes: Vec<UteDetalle>,
 
@@ -71,18 +63,6 @@ pub struct App {
     /// Vista de relacións: grupos (tramas) de razóns sociais interconectadas.
     relacions: Vec<GrupoRelacion>,
     relacions_loaded: bool,
-
-    /// Cola de revisión manual: casos sen vínculo fiable con candidatos a escoller.
-    revisions: Vec<CasoRevision>,
-    /// Casos sen correspondencia en datoscif (resólvense coa busca asistida).
-    sen_match: Vec<CasoRevision>,
-    revisions_loaded: bool,
-    /// Texto de busca asistida por caso (clave = nome do adxudicatario).
-    rev_search: std::collections::HashMap<String, String>,
-    /// Resultados da última busca asistida por caso.
-    rev_results: std::collections::HashMap<String, Vec<Suggestion>>,
-    /// Caso cuxa busca asistida está en curso (para amosar o spinner).
-    rev_searching: Option<String>,
 
     /// Canle pola que o fío do diálogo nativo «Gardar como» devolve o destino
     /// escollido (`None` se o usuario cancela). Está presente mentres o diálogo
@@ -97,33 +77,12 @@ enum Tab {
     Contratos,
     /// Tramas de razóns sociais relacionadas entre si.
     Relacions,
-    /// Cola de revisión manual dos emparellamentos dubidosos.
-    Revision,
-}
-
-/// Acción escollida nun caso da pestana de revisión (procésase fóra do bucle de
-/// pintado para non chocar cos préstamos de `self`).
-enum RevAction {
-    /// Vincular o adxudicatario á entidade (`Some`) ou descartalo (`None`).
-    Resolve(String, Option<Suggestion>),
-    /// Lanzar a busca asistida en datoscif para o caso co termo dado.
-    Search(String, String),
-}
-
-/// Datos de datoscif asociados a un adxudicatario dun contrato.
-struct AdxDatosCif {
-    adx_nome: String,
-    entidade: DatosCifEntidade,
-    cargos: Vec<CargoRow>,
 }
 
 /// Unha empresa membro dunha UTE para a ficha do contrato.
 struct UteMembroVista {
     nome: String,
     cif: String,
-    /// Entidade de datoscif do membro (por CIF), se está vinculada.
-    entidade: Option<DatosCifEntidade>,
-    cargos: Vec<CargoRow>,
 }
 
 /// A composición dunha UTE adxudicataria, para amosar na ficha do contrato.
@@ -169,7 +128,6 @@ impl App {
             busy: false,
             progress: None,
             progress_titulo: "Progreso",
-            enrich_finished: false,
             status: "Listo.".to_string(),
             logs: Vec::new(),
             stats,
@@ -181,22 +139,14 @@ impl App {
             selected: None,
             selected_row: None,
             selected_detail: None,
-            selected_datoscif: Vec::new(),
             selected_utes: Vec::new(),
             tab: Tab::Contratos,
             sub_tab: TipoContrato::Licitacion,
             relacions: Vec::new(),
             relacions_loaded: false,
-            revisions: Vec::new(),
-            sen_match: Vec::new(),
-            revisions_loaded: false,
-            rev_search: std::collections::HashMap::new(),
-            rev_results: std::collections::HashMap::new(),
-            rev_searching: None,
             export_rx: None,
         };
         app.refresh_local();
-        app.refresh_revision();
         app
     }
 
@@ -228,71 +178,6 @@ impl App {
                     self.stats = self.db.stats().unwrap_or_default();
                     self.local_options = self.db.local_options().unwrap_or_default();
                     self.need_query = true;
-                }
-                Event::EnrichDone(r) => {
-                    self.busy = false;
-                    self.progress = None;
-                    self.enrich_finished = true;
-                    self.status = if r.reimport {
-                        format!(
-                            "Reimportación rematada · {} empresas · {} con cargos · {} cargos · {} erros",
-                            r.procesados, r.empresas_con_cargos, r.cargos, r.erros
-                        )
-                    } else {
-                        format!(
-                            "Vinculación rematada · {} procesados · {} vinculados · {} membros UTE · {} a revisar · {} sen match · {} empresas con cargos · {} cargos · {} erros",
-                            r.procesados,
-                            r.vinculados,
-                            r.ute_membros,
-                            r.a_revisar,
-                            r.sen_match,
-                            r.empresas_con_cargos,
-                            r.cargos,
-                            r.erros
-                        )
-                    };
-                    // Os vínculos cambiaron: invalidar a vista de relacións, a cola
-                    // de revisión e o detalle aberto, e refrescar a táboa.
-                    self.relacions_loaded = false;
-                    self.revisions_loaded = false;
-                    self.need_query = true;
-                    if let Some(row) = self.selected_row.clone() {
-                        self.select_contract(row);
-                    }
-                }
-                Event::RevisionResolved {
-                    adx_nome,
-                    vinculado,
-                } => {
-                    self.busy = false;
-                    self.progress = None;
-                    self.status = if vinculado {
-                        format!("«{adx_nome}» vinculado.")
-                    } else {
-                        format!("«{adx_nome}» descartado.")
-                    };
-                    // Limpar o estado de busca asistida do caso resolto.
-                    self.rev_search.remove(&adx_nome);
-                    self.rev_results.remove(&adx_nome);
-                    if self.rev_searching.as_deref() == Some(adx_nome.as_str()) {
-                        self.rev_searching = None;
-                    }
-                    // O caso resolto sae da cola; recalcular relacións e detalle.
-                    self.revisions_loaded = false;
-                    self.relacions_loaded = false;
-                    self.need_query = true;
-                    if let Some(row) = self.selected_row.clone() {
-                        self.select_contract(row);
-                    }
-                }
-                Event::DatoscifResults {
-                    adx_nome,
-                    suggestions,
-                } => {
-                    if self.rev_searching.as_deref() == Some(adx_nome.as_str()) {
-                        self.rev_searching = None;
-                    }
-                    self.rev_results.insert(adx_nome, suggestions);
                 }
                 Event::Exported(path, n) => {
                     self.busy = false;
@@ -327,42 +212,15 @@ impl App {
             self.refresh_local();
             self.need_query = false;
         }
-        if !self.revisions_loaded {
-            self.refresh_revision();
-        }
         if self.busy {
             ctx.request_repaint();
         }
-    }
-
-    /// Lanza unha vinculación con datoscif (novos ou reimportación) e amosa o
-    /// diálogo de progreso.
-    fn start_enrich(&mut self, mode: EnrichMode) {
-        self.busy = true;
-        self.progress = None;
-        self.enrich_finished = false;
-        let (titulo, status): (&'static str, &str) = match mode {
-            EnrichMode::Novos => (
-                "Vinculación con datoscif (relacións)",
-                "Iniciando vinculación con datoscif…",
-            ),
-            EnrichMode::Reimportar => (
-                "Reimportación de datos das empresas",
-                "Iniciando reimportación de datos das empresas…",
-            ),
-        };
-        self.progress_titulo = titulo;
-        self.logs.clear();
-        self.status = status.into();
-        self.worker.send(Command::Enrich(mode));
-        self.show_progress_dialog = true;
     }
 
     /// Lanza a exportación a ODS no fío traballador e amosa o diálogo de progreso.
     fn start_export(&mut self, path: std::path::PathBuf) {
         self.busy = true;
         self.progress = None;
-        self.enrich_finished = false;
         self.progress_titulo = "Exportación a ODS";
         self.logs.clear();
         self.status = "Exportando a ODS…".into();
@@ -406,14 +264,13 @@ impl App {
 
     fn select_contract(&mut self, row: LocalRow) {
         self.selected_detail = self.db.load_detail(&row.id).ok().flatten();
-        self.selected_datoscif = self.build_datoscif_info();
         self.selected_utes = self.build_utes_info(&row.id);
         self.selected = Some(row.id.clone());
         self.selected_row = Some(row);
     }
 
-    /// Composición das UTE adxudicatarias do contrato: cada membro coa súa entidade
-    /// de datoscif (por CIF) e os seus cargos, se está vinculada.
+    /// Composición das UTE adxudicatarias do contrato (nome e CIF de cada membro),
+    /// tal como vén do propio contrato.
     fn build_utes_info(&self, contract_id: &str) -> Vec<UteDetalle> {
         let mut out: Vec<UteDetalle> = Vec::new();
         for (ute_nome, nome, cif) in self
@@ -421,18 +278,7 @@ impl App {
             .ute_membros_de_contrato(contract_id)
             .unwrap_or_default()
         {
-            let entidade = self.db.entidade_por_cif(&cif).ok().flatten();
-            let cargos = entidade
-                .as_ref()
-                .filter(|e| e.is_empresa())
-                .map(|e| self.db.cargos_de_empresa(&e.url).unwrap_or_default())
-                .unwrap_or_default();
-            let membro = UteMembroVista {
-                nome,
-                cif,
-                entidade,
-                cargos,
-            };
+            let membro = UteMembroVista { nome, cif };
             match out.iter_mut().find(|u| u.ute_nome == ute_nome) {
                 Some(u) => u.membros.push(membro),
                 None => out.push(UteDetalle {
@@ -444,39 +290,10 @@ impl App {
         out
     }
 
-    /// Reúne, para cada adxudicatario distinto do contrato aberto, a entidade de
-    /// datoscif vinculada (se a hai) e os seus cargos (só empresas).
-    fn build_datoscif_info(&self) -> Vec<AdxDatosCif> {
-        let mut out = Vec::new();
-        let mut vistos = std::collections::HashSet::new();
-        if let Some((_, resolucions)) = &self.selected_detail {
-            for r in resolucions {
-                let adx = r.adxudicatario.trim();
-                if adx.is_empty() || !vistos.insert(adx.to_string()) {
-                    continue;
-                }
-                if let Ok(Some(ent)) = self.db.entidade_de_adxudicatario(adx) {
-                    let cargos = if ent.is_empresa() {
-                        self.db.cargos_de_empresa(&ent.url).unwrap_or_default()
-                    } else {
-                        Vec::new()
-                    };
-                    out.push(AdxDatosCif {
-                        adx_nome: adx.to_string(),
-                        entidade: ent,
-                        cargos,
-                    });
-                }
-            }
-        }
-        out
-    }
-
     fn close_detail(&mut self) {
         self.selected = None;
         self.selected_row = None;
         self.selected_detail = None;
-        self.selected_datoscif.clear();
         self.selected_utes.clear();
     }
 
@@ -486,41 +303,6 @@ impl App {
             .relacions_compartidas(&self.local)
             .unwrap_or_default();
         self.relacions_loaded = true;
-    }
-
-    fn refresh_revision(&mut self) {
-        self.revisions = self.db.casos_para_revisar().unwrap_or_default();
-        self.sen_match = self.db.casos_sen_match().unwrap_or_default();
-        self.revisions_loaded = true;
-    }
-
-    /// Lanza unha busca asistida en datoscif para un caso (non bloquea a interface;
-    /// os resultados chegan por `Event::DatoscifResults`).
-    fn start_search(&mut self, adx_nome: String, termo: String) {
-        if termo.trim().is_empty() {
-            return;
-        }
-        self.rev_searching = Some(adx_nome.clone());
-        self.worker
-            .send(Command::SearchDatoscif { adx_nome, termo });
-    }
-
-    /// Envía ao worker a resolución dun caso (vincular a `escolla` ou descartar)
-    /// e amosa o diálogo de progreso.
-    fn start_resolve(&mut self, adx_nome: String, escolla: Option<Suggestion>) {
-        self.busy = true;
-        self.progress = None;
-        self.enrich_finished = false;
-        self.progress_titulo = "Resolución manual";
-        self.logs.clear();
-        self.status = if escolla.is_some() {
-            format!("Vinculando «{adx_nome}»…")
-        } else {
-            format!("Descartando «{adx_nome}»…")
-        };
-        self.worker
-            .send(Command::ResolveMatch { adx_nome, escolla });
-        self.show_progress_dialog = true;
     }
 }
 
@@ -666,7 +448,6 @@ impl App {
                         .unwrap_or_default();
                     self.busy = true;
                     self.progress = None;
-                    self.enrich_finished = false;
                     self.progress_titulo = "Importación de contratos";
                     self.logs.clear();
                     self.status = "Iniciando importación…".into();
@@ -760,15 +541,6 @@ impl App {
                             .clicked()
                         {
                             self.show_progress_dialog = false;
-                        }
-                        // Tras unha vinculación, ofrécese redescargar a ficha e os
-                        // cargos de todas as empresas xa vinculadas (volver a importar
-                        // «Importar relacións» non fai nada se non hai novos
-                        // adxudicatarios).
-                        if self.enrich_finished
-                            && ui.button("Reimportar datos das empresas").clicked()
-                        {
-                            self.start_enrich(EnrichMode::Reimportar);
                         }
                     });
                 }
@@ -869,22 +641,6 @@ impl App {
                         .small()
                         .color(Color32::GRAY),
                 );
-
-                ui.add_space(10.0);
-                ui.separator();
-                ui.label(RichText::new("Empresas").strong());
-                let vincular = ui.add_enabled(!self.busy, egui::Button::new("Importar relacións"));
-                if vincular.clicked() {
-                    self.start_enrich(EnrichMode::Novos);
-                }
-                ui.label(
-                    RichText::new(
-                        "Busca cada adxudicatario en datoscif.es e garda os seus \
-                         administradores e apoderados.",
-                    )
-                    .small()
-                    .color(Color32::GRAY),
-                );
             });
 
         egui::CentralPanel::default().show_inside(ui, |ui| {
@@ -902,17 +658,6 @@ impl App {
                 {
                     self.tab = Tab::Relacions;
                 }
-                let rev_label = if self.revisions.is_empty() {
-                    "📝 Revisión".to_string()
-                } else {
-                    format!("📝 Revisión ({})", self.revisions.len())
-                };
-                if ui
-                    .selectable_label(self.tab == Tab::Revision, rev_label)
-                    .clicked()
-                {
-                    self.tab = Tab::Revision;
-                }
             });
             ui.add_space(4.0);
             ui.separator();
@@ -927,7 +672,6 @@ impl App {
                     }
                 }
                 Tab::Relacions => self.relacions_view(ui),
-                Tab::Revision => self.revision_view(ui),
             }
         });
     }
@@ -1344,25 +1088,22 @@ impl App {
                 }
             }
 
-            // Información de datoscif: quen está detrás de cada adxudicatario.
-            render_datoscif(ui, &self.selected_datoscif);
             // Composición das UTE adxudicatarias (empresas membro).
             render_utes(ui, &self.selected_utes);
         });
     }
 
-    /// Vista de relacións: persoas que controlan varias razóns sociais que
-    /// aparecen como adxudicatarias nos contratos.
+    /// Vista de relacións: grupos de razóns sociais que concorreron xuntas nunha
+    /// mesma UTE adxudicataria (dato do propio contrato).
     fn relacions_view(&mut self, ui: &mut egui::Ui) {
         ui.add_space(6.0);
         ui.heading("Relacións entre razóns sociais");
         ui.label(
             RichText::new(
-                "Grupos de razóns sociais conectadas entre si por persoas \
-                 (administradores/apoderados) cun cargo en dúas ou máis das empresas \
-                 adxudicatarias dos teus contratos. Cada grupo reúne todas as empresas e \
-                 persoas dunha mesma trama. Os vínculos por cargos xa cesados (pasados) \
-                 resáltanse: son indicio de relación pero NON son actuais.",
+                "Grupos de razóns sociais que concorreron xuntas nunha mesma Unión \
+                 Temporal de Empresas (UTE) adxudicataria dos teus contratos. Cada grupo \
+                 reúne todas as empresas que comparten UTE; se unha empresa participa en \
+                 varias UTE, todas as súas socias caen na mesma trama.",
             )
             .small()
             .color(Color32::GRAY),
@@ -1378,8 +1119,8 @@ impl App {
             ui.add_space(10.0);
             ui.label(
                 RichText::new(
-                    "Aínda non se atoparon relacións. Vincula primeiro os adxudicatarios \
-                     con datoscif (botón «Vincular con datoscif»).",
+                    "Aínda non se atoparon relacións. As tramas xórdense das UTE \
+                     adxudicatarias dos contratos importados.",
                 )
                 .italics()
                 .color(Color32::GRAY),
@@ -1387,14 +1128,7 @@ impl App {
             return;
         }
 
-        // Cor de resalte para os vínculos históricos (cargos cesados). Cáptase
-        // antes do préstamo inmutable de `self.relacions`.
-        let historico = if self.dark {
-            Color32::from_rgb(0xF0, 0xB0, 0x30)
-        } else {
-            Color32::from_rgb(0xB5, 0x6A, 0x00)
-        };
-        // Cor do vínculo por UTE (distinta do histórico e do administrador).
+        // Cor do vínculo por UTE.
         let ute_color = if self.dark {
             Color32::from_rgb(0x5A, 0xC8, 0xE0)
         } else {
@@ -1409,42 +1143,8 @@ impl App {
                 ui.add_space(6.0);
                 ui.group(|ui| {
                     ui.set_width(ui.available_width());
-                    // Persoas que conectan o grupo (pode non habelas: trama só por UTE).
-                    if !g.persoas.is_empty() {
-                        ui.horizontal_wrapped(|ui| {
-                            ui.label(RichText::new("Persoas:").small().color(Color32::GRAY));
-                            for p in &g.persoas {
-                                ui.hyperlink_to(
-                                    RichText::new(&p.persona_nome).strong(),
-                                    format!("{DATOSCIF_BASE}/directivo/{}", p.persona_url),
-                                );
-                                // Resumo dos vínculos da persoa: cantos actuais e cantos
-                                // xa cesados. Se hai algún pasado, resáltase.
-                                let (txt, color) = if p.empresas_pasadas == 0 {
-                                    (format!("({} empresas)", p.num_empresas), Color32::GRAY)
-                                } else if p.empresas_activas == 0 {
-                                    (
-                                        format!("({} empresas, todas pasadas)", p.num_empresas),
-                                        historico,
-                                    )
-                                } else {
-                                    (
-                                        format!(
-                                            "({} actuais · {} pasada{})",
-                                            p.empresas_activas,
-                                            p.empresas_pasadas,
-                                            if p.empresas_pasadas == 1 { "" } else { "s" },
-                                        ),
-                                        historico,
-                                    )
-                                };
-                                ui.label(RichText::new(txt).small().color(color));
-                            }
-                        });
-                    }
 
-                    // UTE: empresas que concorreron xuntas (vínculo distinto do
-                    // administrador compartido).
+                    // UTE que vinculan as razóns sociais do grupo.
                     for u in &g.utes {
                         ui.horizontal_wrapped(|ui| {
                             ui.label(RichText::new("🤝 UTE:").small().strong().color(ute_color));
@@ -1464,25 +1164,12 @@ impl App {
                     for e in &g.empresas {
                         ui.horizontal_wrapped(|ui| {
                             ui.label("•");
-                            ui.hyperlink_to(
-                                RichText::new(&e.empresa_nome).strong(),
-                                format!("{DATOSCIF_BASE}/empresa/{}", e.empresa_url),
+                            ui.label(RichText::new(&e.empresa_nome).strong());
+                            ui.label(
+                                RichText::new(format!("· {} contratos", e.num_contratos))
+                                    .small()
+                                    .color(Color32::GRAY),
                             );
-                            let mut extra = format!("· {} contratos", e.num_contratos);
-                            if !e.provincia.is_empty() {
-                                extra = format!("· {} {}", e.provincia, extra);
-                            }
-                            ui.label(RichText::new(extra).small().color(Color32::GRAY));
-                            // Vínculo só por cargos cesados (non se marca se a empresa
-                            // entra no grupo por UTE, non por administrador).
-                            if e.con_cargos && !e.activa {
-                                ui.label(
-                                    RichText::new("⏱ só cargos pasados")
-                                        .small()
-                                        .strong()
-                                        .color(historico),
-                                );
-                            }
                         });
                     }
 
@@ -1495,7 +1182,7 @@ impl App {
                             g.contratos.len(),
                             format_importe(g.importe_total),
                         );
-                        let id = egui::Id::new(("contratos_grupo", &g.empresas[0].empresa_url));
+                        let id = egui::Id::new(("contratos_grupo", &g.empresas[0].cif));
                         egui::CollapsingHeader::new(RichText::new(titulo).strong())
                             .id_salt(id)
                             .show(ui, |ui| {
@@ -1557,279 +1244,6 @@ impl App {
             self.tab = Tab::Contratos;
         }
     }
-
-    /// Cola de revisión manual + proceso asistido para os casos sen correspondencia.
-    fn revision_view(&mut self, ui: &mut egui::Ui) {
-        ui.add_space(6.0);
-        ui.heading("Revisión de vínculos");
-        ui.label(
-            RichText::new(
-                "Adxudicatarios que datoscif non puido vincular con confianza dabondo. \
-                 Escolle a entidade correcta entre os candidatos ou búscaa a man en datoscif; \
-                 descártaos se ningún coincide. O NIF do contrato (cando se coñece) axuda a decidir.",
-            )
-            .small()
-            .color(Color32::GRAY),
-        );
-        ui.add_space(6.0);
-        ui.separator();
-        ui.add_space(6.0);
-
-        if self.revisions.is_empty() && self.sen_match.is_empty() {
-            ui.add_space(10.0);
-            ui.label(
-                RichText::new(
-                    "Non hai casos pendentes. Importa relacións para xerar vínculos a revisar.",
-                )
-                .italics()
-                .color(Color32::GRAY),
-            );
-            return;
-        }
-
-        let busy = self.busy;
-        // Sácanse as listas para poder mutar o estado de busca (`self.rev_*`)
-        // mentres se pintan os casos.
-        let revisar = std::mem::take(&mut self.revisions);
-        let sen_match = std::mem::take(&mut self.sen_match);
-        let mut accion: Option<RevAction> = None;
-
-        ScrollArea::vertical().show(ui, |ui| {
-            if !revisar.is_empty() {
-                ui.label(
-                    RichText::new(format!("Con candidatos suxeridos ({})", revisar.len())).strong(),
-                );
-                for caso in &revisar {
-                    if let Some(a) = self.render_caso(ui, caso, busy) {
-                        accion = Some(a);
-                    }
-                }
-            }
-            if !sen_match.is_empty() {
-                ui.add_space(8.0);
-                egui::CollapsingHeader::new(
-                    RichText::new(format!(
-                        "Sen correspondencia en datoscif ({})",
-                        sen_match.len()
-                    ))
-                    .strong(),
-                )
-                .id_salt("sen_match")
-                .show(ui, |ui| {
-                    ui.label(
-                        RichText::new(
-                            "Non se atopou candidato automaticamente. Busca a man axustando o \
-                             termo (quita acentos ou sufixos, ou usa só parte do nome).",
-                        )
-                        .small()
-                        .color(Color32::GRAY),
-                    );
-                    for caso in &sen_match {
-                        if let Some(a) = self.render_caso(ui, caso, busy) {
-                            accion = Some(a);
-                        }
-                    }
-                });
-            }
-        });
-
-        self.revisions = revisar;
-        self.sen_match = sen_match;
-
-        match accion {
-            Some(RevAction::Resolve(adx_nome, escolla)) => self.start_resolve(adx_nome, escolla),
-            Some(RevAction::Search(adx_nome, termo)) => self.start_search(adx_nome, termo),
-            None => {}
-        }
-    }
-
-    /// Pinta un caso de revisión: candidatos suxeridos (se os hai), busca asistida
-    /// en datoscif e descartar. Devolve a acción escollida, se a hai.
-    fn render_caso(
-        &mut self,
-        ui: &mut egui::Ui,
-        caso: &CasoRevision,
-        busy: bool,
-    ) -> Option<RevAction> {
-        // Estado de busca deste caso (a locais; escríbese de volta tras pintar).
-        let mut termo = self
-            .rev_search
-            .get(&caso.adx_nome)
-            .cloned()
-            .unwrap_or_else(|| caso.adx_nome.clone());
-        let searching = self.rev_searching.as_deref() == Some(caso.adx_nome.as_str());
-        let resultados = self.rev_results.get(&caso.adx_nome).cloned();
-        let mut accion: Option<RevAction> = None;
-
-        ui.add_space(6.0);
-        ui.group(|ui| {
-            ui.set_width(ui.available_width());
-            ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new(&caso.adx_nome).strong().size(15.0));
-                if !caso.nif.is_empty() {
-                    ui.label(
-                        RichText::new(format!("NIF {}", caso.nif))
-                            .small()
-                            .monospace()
-                            .color(Color32::GRAY),
-                    );
-                }
-            });
-
-            // Candidatos suxeridos automaticamente.
-            if !caso.candidatos.is_empty() {
-                ui.add_space(4.0);
-                for c in &caso.candidatos {
-                    if candidato_row(ui, c, busy) {
-                        accion = Some(RevAction::Resolve(caso.adx_nome.clone(), Some(c.clone())));
-                    }
-                }
-            }
-
-            // Busca asistida en datoscif.
-            ui.add_space(6.0);
-            ui.separator();
-            ui.horizontal_wrapped(|ui| {
-                ui.label(
-                    RichText::new("Buscar en datoscif:")
-                        .small()
-                        .color(Color32::GRAY),
-                );
-                let resp = ui.add_enabled(
-                    !busy && !searching,
-                    egui::TextEdit::singleline(&mut termo)
-                        .desired_width(220.0)
-                        .hint_text("nome a buscar"),
-                );
-                let premido_enter =
-                    resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                let buscar = ui.add_enabled(!busy && !searching, egui::Button::new("Buscar"));
-                if searching {
-                    ui.spinner();
-                }
-                if (buscar.clicked() || premido_enter) && !termo.trim().is_empty() {
-                    accion = Some(RevAction::Search(caso.adx_nome.clone(), termo.clone()));
-                }
-            });
-
-            // Resultados da busca asistida.
-            if let Some(res) = &resultados {
-                if res.is_empty() {
-                    ui.label(
-                        RichText::new("Sen resultados. Proba a axustar o termo.")
-                            .small()
-                            .italics()
-                            .color(Color32::GRAY),
-                    );
-                } else {
-                    for c in res.iter().take(15) {
-                        if candidato_row(ui, c, busy) {
-                            accion =
-                                Some(RevAction::Resolve(caso.adx_nome.clone(), Some(c.clone())));
-                        }
-                    }
-                }
-            }
-
-            ui.add_space(4.0);
-            if ui
-                .add_enabled(!busy, egui::Button::new("Ningún — descartar"))
-                .clicked()
-            {
-                accion = Some(RevAction::Resolve(caso.adx_nome.clone(), None));
-            }
-        });
-
-        self.rev_search.insert(caso.adx_nome.clone(), termo);
-        accion
-    }
-}
-
-/// Pinta unha fila de candidato co botón «Vincular». Devolve `true` se se premeu.
-fn candidato_row(ui: &mut egui::Ui, c: &Suggestion, busy: bool) -> bool {
-    let es_empresa = c.tipo_entidad == 1;
-    let ruta = if es_empresa { "empresa" } else { "directivo" };
-    let mut vincular = false;
-    ui.horizontal_wrapped(|ui| {
-        if ui
-            .add_enabled(!busy, egui::Button::new("Vincular"))
-            .clicked()
-        {
-            vincular = true;
-        }
-        ui.label(if es_empresa { "🏢" } else { "👤" });
-        ui.label(RichText::new(&c.nombre).strong());
-        ui.hyperlink_to("↗ datoscif", format!("{DATOSCIF_BASE}/{ruta}/{}", c.url));
-    });
-    vincular
-}
-
-/// Renderiza, na vista de detalle, a entidade de datoscif e os seus cargos para
-/// cada adxudicatario do contrato.
-fn render_datoscif(ui: &mut egui::Ui, info: &[AdxDatosCif]) {
-    if info.is_empty() {
-        return;
-    }
-    ui.add_space(12.0);
-    ui.separator();
-    ui.add_space(6.0);
-    section_header(ui, "Quen está detrás (datoscif)");
-    for a in info {
-        ui.add_space(6.0);
-        ui.group(|ui| {
-            ui.set_width(ui.available_width());
-            ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new(&a.entidade.nome).strong());
-                let ruta = if a.entidade.is_empresa() {
-                    "empresa"
-                } else {
-                    "directivo"
-                };
-                ui.hyperlink_to(
-                    "↗ datoscif",
-                    format!("{DATOSCIF_BASE}/{ruta}/{}", a.entidade.url),
-                );
-            });
-            if a.adx_nome != a.entidade.nome {
-                ui.label(
-                    RichText::new(format!("adxudicatario: {}", a.adx_nome))
-                        .small()
-                        .color(Color32::GRAY),
-                );
-            }
-            // Datos da persoa xurídica (CIF, localización).
-            let e = &a.entidade;
-            if !e.cif.is_empty() {
-                ui.label(RichText::new(format!("CIF: {}", e.cif)).small());
-            }
-            let lugar = match (e.municipio.is_empty(), e.provincia.is_empty()) {
-                (false, false) => format!("{} ({})", e.municipio, e.provincia),
-                (false, true) => e.municipio.clone(),
-                (true, false) => e.provincia.clone(),
-                (true, true) => String::new(),
-            };
-            if !lugar.is_empty() {
-                let mut txt = lugar;
-                if !e.domicilio.is_empty() {
-                    txt = format!("{} · {}", e.domicilio, txt);
-                }
-                ui.label(RichText::new(txt).small().color(Color32::GRAY));
-            }
-            if a.entidade.is_empresa() {
-                if a.cargos.is_empty() {
-                    ui.label(
-                        RichText::new("Sen cargos rexistrados.")
-                            .small()
-                            .italics()
-                            .color(Color32::GRAY),
-                    );
-                } else {
-                    ui.add_space(4.0);
-                    render_cargos(ui, &a.cargos);
-                }
-            }
-        });
-    }
 }
 
 /// Reserva unha marxe interior de 4px a ambos lados da cela para que o contido
@@ -1842,45 +1256,8 @@ fn pad_cela(ui: &mut egui::Ui) {
     ui.set_max_width((ancho - 2.0 * PAD).max(0.0));
 }
 
-/// Renderiza a lista de cargos dunha empresa: activos con ●; cesados con ○,
-/// atenuados e marcados como históricos (cor ámbar) coa data de cese.
-fn render_cargos(ui: &mut egui::Ui, cargos: &[CargoRow]) {
-    let historico = if ui.visuals().dark_mode {
-        Color32::from_rgb(0xF0, 0xB0, 0x30)
-    } else {
-        Color32::from_rgb(0xB5, 0x6A, 0x00)
-    };
-    for c in cargos {
-        ui.horizontal_wrapped(|ui| {
-            if c.activo {
-                ui.label(RichText::new("●").small());
-                ui.label(RichText::new(&c.persona_nome).strong().small());
-                if !c.cargo.is_empty() {
-                    ui.label(RichText::new(format!("— {}", c.cargo)).small());
-                }
-            } else {
-                ui.label(RichText::new("○").small().color(historico));
-                ui.label(RichText::new(&c.persona_nome).small().color(Color32::GRAY));
-                if !c.cargo.is_empty() {
-                    ui.label(
-                        RichText::new(format!("— {}", c.cargo))
-                            .small()
-                            .color(Color32::GRAY),
-                    );
-                }
-                let marca = if c.hasta.is_empty() {
-                    "· cesado".to_string()
-                } else {
-                    format!("· cesado o {}", format_data_gl(&c.hasta))
-                };
-                ui.label(RichText::new(marca).small().strong().color(historico));
-            }
-        });
-    }
-}
-
 /// Renderiza, na ficha do contrato, a composición das UTE adxudicatarias: cada
-/// empresa membro co seu CIF, e (se está vinculada) a súa ficha de datoscif e cargos.
+/// empresa membro co seu CIF.
 fn render_utes(ui: &mut egui::Ui, utes: &[UteDetalle]) {
     if utes.is_empty() {
         return;
@@ -1907,26 +1284,7 @@ fn render_utes(ui: &mut egui::Ui, utes: &[UteDetalle]) {
                                 .color(Color32::GRAY),
                         );
                     }
-                    match &m.entidade {
-                        Some(e) if !e.url.is_empty() => {
-                            ui.hyperlink_to(
-                                "↗ datoscif",
-                                format!("{DATOSCIF_BASE}/empresa/{}", e.url),
-                            );
-                        }
-                        _ => {
-                            ui.label(
-                                RichText::new("(sen vincular)")
-                                    .small()
-                                    .italics()
-                                    .color(Color32::GRAY),
-                            );
-                        }
-                    }
                 });
-                if !m.cargos.is_empty() {
-                    render_cargos(ui, &m.cargos);
-                }
             }
         });
     }

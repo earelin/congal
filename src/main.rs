@@ -2,7 +2,6 @@
 
 mod app;
 mod db;
-mod enrich;
 mod export;
 mod model;
 mod scraper;

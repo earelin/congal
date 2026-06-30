@@ -4,10 +4,9 @@ Aplicación de escritorio (Windows / macOS / Linux) escrita en **Rust** para ext
 almacenar, analizar e exportar a información de contratos públicos da Xunta de Galicia desde
 [contratosdegalicia.gal](https://www.contratosdegalicia.gal).
 
-Ademais de descargar e gardar os contratos, Congal **enriquece** cada adxudicatario coa
-información societaria de [datoscif.es](https://www.datoscif.es) (CIF, domicilio, cargos) e
-revela **tramas**: razóns sociais conectadas por administradores compartidos ou por formar parte
-da mesma UTE.
+Ademais de descargar e gardar os contratos, Congal revela **tramas**: razóns sociais
+conectadas por formar parte dunha mesma UTE (Unión Temporal de Empresas) adxudicataria. Toda a
+información provén de contratosdegalicia.gal.
 
 ## Características
 
@@ -16,7 +15,7 @@ da mesma UTE.
   (fonte Inter, iconas Lucide, modo claro/escuro automático, acento azul sistema).
 - A interface **nunca se bloquea**: as operacións de rede e de disco execútanse nun fío de
   traballo en segundo plano e a vista actualízase cos eventos de progreso.
-- Tres pestanas: **Contratos**, **Relacións** e **Revisión**.
+- Dúas pestanas: **Contratos** e **Relacións**.
 
 ### Contratos
 - **Listado local** dos contratos xa importados, con busca sen rede (texto,
@@ -26,8 +25,7 @@ da mesma UTE.
   contratos cun **único licitador** (posible indicio de irregularidade).
 - De cada contrato gárdanse os datos do listado, o detalle completo e os **datos da
   resolución** (adxudicatario, importe, estado por lote e enlace á resolución).
-- O detalle amosa a información societaria do adxudicatario obtida de datoscif (ficha e cargos)
-  e, no caso das **UTE**, a súa composición (membros + a ficha de cada un).
+- No caso das **UTE**, o detalle amosa a súa composición (empresas membro co seu CIF).
 
 ### Importación de datos
 - Diálogo modal cos mesmos filtros ca a web (estado, ano, órgano de contratación, busca
@@ -37,26 +35,13 @@ da mesma UTE.
   descargar; só se actualizan os que seguían en proceso e os novos, mantendo o histórico.
 - Barra de progreso nun segundo modal, **cancelable** en calquera momento.
 
-### Enriquecemento e relacións (datoscif)
-- O botón **«Importar relacións»** empareza cada adxudicatario coa súa entidade en datoscif.
-  Cando hai un gañador claro (ou se valida o CIF) o vínculo créase automaticamente; cando hai
-  candidatos plausibles pero ningún seguro, o caso vai á **cola de revisión manual**.
-- A coincidencia valídase preferentemente polo **CIF** (o sinal máis fiable): aínda que
-  datoscif só permite buscar por nome, o CIF do adxudicatario serve para confirmar o candidato
-  correcto.
-- Tamén se emparellan os **membros das UTE** adxudicatarias, que se incorporan ao grafo de
-  relacións.
-- O botón **«Reimportar datos das empresas»** volve descargar a ficha e os cargos das empresas
-  xa vinculadas para actualizar a información.
-- A pestana **Relacións** amosa as **tramas**: persoas que controlan varias razóns sociais
-  contratadas (administradores compartidos) e empresas unidas por formar parte dunha mesma UTE.
-  Os vínculos baseados só en cargos **pasados/cesados** resáltanse como indicio non actual.
-
-### Revisión manual
-- A pestana **Revisión** xestiona os casos que o emparellamento automático non puido resolver
-  con seguridade: casos con candidatos e unha sección de «sen correspondencia».
-- Cada caso inclúe unha **busca asistida en vivo en datoscif** para atopar e vincular a man a
-  entidade correcta (ou descartar o caso).
+### Relacións
+- A pestana **Relacións** amosa as **tramas**: grupos de razóns sociais que concorreron xuntas
+  nunha mesma UTE adxudicataria. Se unha empresa participa en varias UTE, todas as súas socias
+  caen na mesma trama.
+- Cada grupo amosa as empresas membro, as UTE que as vinculan e un despregable cos contratos
+  adxudicados (e o importe total). As relacións derívanse unicamente dos datos de
+  contratosdegalicia.gal (a composición das UTE), sen recorrer a fontes externas.
 
 ### Exportación
 - **Exportación a OpenDocument Spreadsheet (.ods)** da selección filtrada.
@@ -115,10 +100,8 @@ A base de datos `contratos.sqlite` créase no cartafol de datos do usuario
 - O documento PDF da resolución está protexido por reCAPTCHA e **non** se descarga; gárdase só a
   URL pública da resolución.
 - Todo o sitio **contratosdegalicia.gal** está en **ISO-8859-1**; o contido decodifícase
-  explicitamente. Por contra, as APIs de **datoscif.es** devolven **JSON en UTF-8** (pero a
-  petición de busca debe enviarse codificada en ISO-8859-1).
-- A busca en datoscif está anclada ao prefixo do nome e a información societaria das fichas lese
-  da microdata schema.org (`taxID`, `streetAddress`, etc.).
+  explicitamente. A excepción é a API JSON do perfil do contratante (contratos menores), que vai
+  en UTF-8.
 
 ## Licenzas de terceiros
 
