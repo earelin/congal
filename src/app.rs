@@ -3,8 +3,8 @@
 
 use crate::db::{Db, DbStats, LocalOptions};
 use crate::model::{
-    ContractDetail, EmpresaContratos, FilterOptions, GrupoRelacion, ImportParams, LocalFilters,
-    LocalRow, Resolucion, SortColumn, TipoContrato, format_importe,
+    ContractDetail, EmpresaContratos, EmpresaSortColumn, FilterOptions, GrupoRelacion,
+    ImportParams, LocalFilters, LocalRow, Resolucion, SortColumn, TipoContrato, format_importe,
 };
 use crate::theme;
 use crate::worker::{Command, Event, Worker};
@@ -1208,6 +1208,11 @@ impl App {
         let total = self.empresas_total;
         let cache = &self.empresas_cache;
         let mut needed: Vec<usize> = Vec::new();
+        // Orde actual (cópiase para usala dentro do peche da cabeceira sen tomar
+        // prestado `self`); o clic recóllese e aplícase tras a táboa, igual ca os contratos.
+        let (cur_col, cur_asc) = (self.local.empresas_sort_col, self.local.empresas_sort_asc);
+        let accent = theme::accent(self.dark);
+        let mut clicked_header: Option<EmpresaSortColumn> = None;
         // As celas non capturan o clic; texto non seleccionable como na táboa de
         // contratos, para un aspecto coherente.
         ui.style_mut().interaction.selectable_labels = false;
@@ -1221,21 +1226,38 @@ impl App {
             .column(Column::initial(100.0).at_least(80.0))
             .column(Column::initial(140.0).at_least(110.0))
             .header(24.0, |mut h| {
-                for (t, num) in [
-                    ("Empresa", false),
-                    ("NIF", false),
-                    ("Nº contratos", true),
-                    ("Importe total", true),
+                // (título, columna de orde, numérica). Premer ordena; volver premer inverte.
+                // A columna activa marca cor de acento e frecha. As numéricas aliñan á dereita.
+                for (t, col, num) in [
+                    ("Empresa", EmpresaSortColumn::Nome, false),
+                    ("NIF", EmpresaSortColumn::Nif, false),
+                    ("Nº contratos", EmpresaSortColumn::NumContratos, true),
+                    ("Importe total", EmpresaSortColumn::ImporteTotal, true),
                 ] {
+                    let activa = col == cur_col;
+                    let etiqueta = if activa {
+                        format!("{t} {}", if cur_asc { "▲" } else { "▼" })
+                    } else {
+                        t.to_string()
+                    };
+                    let mut txt = RichText::new(etiqueta).strong();
+                    if activa {
+                        txt = txt.color(accent);
+                    }
                     h.col(|ui| {
                         pad_cela(ui);
-                        let txt = RichText::new(t).strong();
-                        if num {
-                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                ui.label(txt);
-                            });
+                        let lab = egui::Label::new(txt).sense(egui::Sense::click());
+                        let resp = if num {
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| ui.add(lab))
+                                .inner
                         } else {
-                            ui.label(txt);
+                            ui.add(lab)
+                        };
+                        if resp
+                            .on_hover_cursor(egui::CursorIcon::PointingHand)
+                            .clicked()
+                        {
+                            clicked_header = Some(col);
                         }
                     });
                 }
@@ -1286,6 +1308,19 @@ impl App {
                 self.ensure_empresas_chunk_loaded(chunk * CHUNK);
             }
             ui.ctx().request_repaint();
+        }
+
+        // Aplicar o clic na cabeceira: mesma columna inverte; nova columna usa o seu
+        // sentido por defecto. `empresas_loaded = false` fai que `refresh_empresas`
+        // limpe a caché e recargue os chuncos coa nova orde.
+        if let Some(col) = clicked_header {
+            if self.local.empresas_sort_col == col {
+                self.local.empresas_sort_asc = !self.local.empresas_sort_asc;
+            } else {
+                self.local.empresas_sort_col = col;
+                self.local.empresas_sort_asc = col.default_asc();
+            }
+            self.empresas_loaded = false;
         }
     }
 

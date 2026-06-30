@@ -892,6 +892,14 @@ impl Db {
         // Unha empresa por clave (`ekey` = NIF, ou clave do nome se non hai NIF).
         // O nome e o NIF amosados son representativos (MAX) por se a mesma empresa
         // aparece con grafías distintas. Só contan as resolucións con adxudicatario.
+        // Orde dinámica segundo a columna premida na cabeceira. `ekey` final como
+        // desempate estable: a táboa virtual paxina e, sen orde total determinista, as
+        // filas poderían duplicarse/saltarse entre chuncos (igual ca o `id` de contratos).
+        let dir = if filtros.empresas_sort_asc {
+            "ASC"
+        } else {
+            "DESC"
+        };
         let mut sql = format!(
             "WITH {filtrados} \
              SELECT {EMPRESAS_EKEY} AS ekey, \
@@ -900,7 +908,8 @@ impl Db {
                     COUNT(DISTINCT r.contract_id) AS num_contratos, \
                     SUM(r.importe_resolucion_num) AS importe_total \
              {EMPRESAS_GROUP} \
-             ORDER BY importe_total DESC NULLS LAST, num_contratos DESC, nome COLLATE NOCASE"
+             ORDER BY {} {dir} NULLS LAST, ekey",
+            filtros.empresas_sort_col.order_sql()
         );
         // Paxinación opcional: a táboa virtual carga por chuncos.
         let (limit, offset) = page.map(|(o, l)| (l as i64, o as i64)).unwrap_or((-1, 0));

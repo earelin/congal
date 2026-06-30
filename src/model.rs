@@ -406,6 +406,39 @@ impl SortColumn {
     }
 }
 
+/// Columna pola que se ordena o listado de empresas adxudicatarias (clic na cabeceira).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum EmpresaSortColumn {
+    Nome,
+    Nif,
+    NumContratos,
+    #[default]
+    ImporteTotal,
+}
+
+impl EmpresaSortColumn {
+    /// Expresión SQL pola que ordenar: son os alias de saída da consulta
+    /// (`empresas_inner` agrupa e expón estes alias). Son fixos (sen entrada do
+    /// usuario): non hai risco de inxección.
+    pub fn order_sql(self) -> &'static str {
+        match self {
+            EmpresaSortColumn::Nome => "nome COLLATE NOCASE",
+            EmpresaSortColumn::Nif => "nif COLLATE NOCASE",
+            EmpresaSortColumn::NumContratos => "num_contratos",
+            EmpresaSortColumn::ImporteTotal => "importe_total",
+        }
+    }
+
+    /// Sentido por defecto ao premer por primeira vez nunha columna: as numéricas
+    /// ordénanse descendente (o máis grande primeiro); as de texto, ascendente (A→Z).
+    pub fn default_asc(self) -> bool {
+        match self {
+            EmpresaSortColumn::NumContratos | EmpresaSortColumn::ImporteTotal => false,
+            EmpresaSortColumn::Nome | EmpresaSortColumn::Nif => true,
+        }
+    }
+}
+
 /// Filtros aplicados localmente sobre a base de datos (sen rede).
 #[derive(Debug, Clone, Default)]
 pub struct LocalFilters {
@@ -419,6 +452,11 @@ pub struct LocalFilters {
     /// Orde do listado (columna + ascendente). Por defecto: data descendente.
     pub sort_col: SortColumn,
     pub sort_asc: bool,
+    /// Orde da vista de empresas (columna + ascendente). Por defecto: importe total
+    /// descendente (`empresas_sort_asc = false` casa co sentido por defecto de
+    /// `ImporteTotal`).
+    pub empresas_sort_col: EmpresaSortColumn,
+    pub empresas_sort_asc: bool,
 }
 
 #[cfg(test)]
