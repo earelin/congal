@@ -1365,6 +1365,116 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    // A vista de empresas ordénase pola columna premida na cabeceira, en ambos
+    // sentidos. `ekey` é o desempate estable; aquí as filas non empatan en ningunha
+    // columna, así que a orde queda determinada só pola columna e o sentido.
+    #[test]
+    fn ordena_a_vista_de_empresas_por_columna() {
+        use crate::model::EmpresaSortColumn;
+        let path = std::env::temp_dir().join("congal_test_empresas_sort.sqlite");
+        let _ = std::fs::remove_file(&path);
+        let mut db = Db::open(&path).expect("db");
+        db.upsert_summaries(
+            &[
+                summary("1", "a", "Org", "Adxudicado", "01/02/2025"),
+                summary("2", "b", "Org", "Adxudicado", "02/02/2025"),
+            ],
+            "agora",
+        )
+        .expect("sum");
+        // Empresa A (B111): 2 contratos, 1500 €. Empresa B (B222): 1 contrato, 200 €.
+        db.upsert_detail(
+            &ContractDetail {
+                contract_id: "1".into(),
+                ..Default::default()
+            },
+            &[Resolucion {
+                adxudicatario: "Empresa A SL".into(),
+                nif: "B111".into(),
+                importe_num: Some(1000.0),
+                ..Default::default()
+            }],
+        )
+        .expect("d1");
+        db.upsert_detail(
+            &ContractDetail {
+                contract_id: "2".into(),
+                ..Default::default()
+            },
+            &[
+                Resolucion {
+                    adxudicatario: "Empresa A SL".into(),
+                    nif: "B111".into(),
+                    importe_num: Some(500.0),
+                    ..Default::default()
+                },
+                Resolucion {
+                    adxudicatario: "Empresa B SL".into(),
+                    nif: "B222".into(),
+                    importe_num: Some(200.0),
+                    ..Default::default()
+                },
+            ],
+        )
+        .expect("d2");
+
+        let nifs = |col: EmpresaSortColumn, asc: bool| -> Vec<String> {
+            let f = LocalFilters {
+                empresas_sort_col: col,
+                empresas_sort_asc: asc,
+                ..Default::default()
+            };
+            db.query_empresas_page(&f, 0, 1000)
+                .unwrap()
+                .into_iter()
+                .map(|e| e.nif)
+                .collect()
+        };
+
+        assert_eq!(
+            nifs(EmpresaSortColumn::Nome, true),
+            ["B111", "B222"],
+            "nome A→Z"
+        );
+        assert_eq!(
+            nifs(EmpresaSortColumn::Nome, false),
+            ["B222", "B111"],
+            "nome Z→A"
+        );
+        assert_eq!(
+            nifs(EmpresaSortColumn::Nif, true),
+            ["B111", "B222"],
+            "NIF asc"
+        );
+        assert_eq!(
+            nifs(EmpresaSortColumn::Nif, false),
+            ["B222", "B111"],
+            "NIF desc"
+        );
+        assert_eq!(
+            nifs(EmpresaSortColumn::NumContratos, true),
+            ["B222", "B111"],
+            "nº contratos asc (1, 2)"
+        );
+        assert_eq!(
+            nifs(EmpresaSortColumn::NumContratos, false),
+            ["B111", "B222"],
+            "nº contratos desc (2, 1)"
+        );
+        assert_eq!(
+            nifs(EmpresaSortColumn::ImporteTotal, true),
+            ["B222", "B111"],
+            "importe asc (200, 1500)"
+        );
+        assert_eq!(
+            nifs(EmpresaSortColumn::ImporteTotal, false),
+            ["B111", "B222"],
+            "importe desc (1500, 200)"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
     // Só se marca o contrato no que TODOS os lotes constan cun único participante.
     #[test]
     fn marca_contratos_de_participante_unico() {
