@@ -44,6 +44,8 @@ pub struct App {
     local_options: LocalOptions,
     /// Nº total de filas que casan cos filtros actuais (para a táboa virtual).
     total_rows: usize,
+    /// Suma dos importes das filas que casan cos filtros actuais.
+    total_importe: f64,
     /// Caché de filas cargadas por chunco (clave = índice de chunco = fila/`CHUNK`).
     /// A táboa virtual carga progresivamente só os chuncos que entran en pantalla.
     row_cache: std::collections::HashMap<usize, Vec<LocalRow>>,
@@ -150,6 +152,7 @@ impl App {
             local: LocalFilters::default(),
             local_options,
             total_rows: 0,
+            total_importe: 0.0,
             row_cache: std::collections::HashMap::new(),
             need_query: true,
             selected: None,
@@ -260,9 +263,13 @@ impl App {
         // as filas visibles cárganse baixo demanda en `results_table`.
         self.row_cache.clear();
         match self.db.count_local(&self.local) {
-            Ok(n) => self.total_rows = n,
+            Ok((n, total)) => {
+                self.total_rows = n;
+                self.total_importe = total;
+            }
             Err(e) => {
                 self.total_rows = 0;
+                self.total_importe = 0.0;
                 self.status = format!("⚠ consulta local: {e}");
             }
         }
@@ -479,7 +486,7 @@ impl App {
             );
             ui.add_space(10.0);
 
-            ui.label(RichText::new("Ano (contratos menores)").strong());
+            ui.label(RichText::new("Ano").strong());
             year_combo(ui, &mut self.import.ano);
 
             if !self.options_loaded {
@@ -704,9 +711,13 @@ impl App {
                     self.export_rx = Some(rx);
                 }
                 ui.label(
-                    RichText::new(format!("{} filas no resultado", self.total_rows))
-                        .small()
-                        .color(Color32::GRAY),
+                    RichText::new(format!(
+                        "{} filas no resultado · Total: {}",
+                        self.total_rows,
+                        format_importe(self.total_importe)
+                    ))
+                    .small()
+                    .color(Color32::GRAY),
                 );
             });
 

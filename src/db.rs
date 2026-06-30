@@ -652,10 +652,11 @@ impl Db {
         self.query_local_inner(f, Some((offset, limit)))
     }
 
-    /// Número total de contratos que casan cos filtros (sen traer as filas).
-    pub fn count_local(&self, f: &LocalFilters) -> Result<usize> {
+    /// Número total de contratos que casan cos filtros e a suma dos seus importes
+    /// (a columna `importe_num`, a mesma que amosa o listado), sen traer as filas.
+    pub fn count_local(&self, f: &LocalFilters) -> Result<(usize, f64)> {
         let mut sql = String::from(
-            "SELECT COUNT(*) FROM contracts c \
+            "SELECT COUNT(*), COALESCE(SUM(c.importe_num), 0.0) FROM contracts c \
              LEFT JOIN organismos o ON o.cod_organismo = c.cod_organismo \
              WHERE c.tipo = ?",
         );
@@ -664,8 +665,10 @@ impl Db {
         sql.push_str(&where_sql);
         let params: Vec<&dyn rusqlite::ToSql> =
             args.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
-        let n: i64 = self.conn.query_row(&sql, params.as_slice(), |r| r.get(0))?;
-        Ok(n.max(0) as usize)
+        let (n, total): (i64, f64) = self
+            .conn
+            .query_row(&sql, params.as_slice(), |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok((n.max(0) as usize, total))
     }
 
     /// Carga unha única fila do listado polo seu id (para saltar a un contrato
@@ -1392,7 +1395,7 @@ mod tests {
         db.upsert_summaries(&filas, "agora").expect("upsert");
 
         let f = LocalFilters::default();
-        assert_eq!(db.count_local(&f).expect("count"), 5);
+        assert_eq!(db.count_local(&f).expect("count").0, 5);
 
         let todo = db.query_local(&f).expect("todo");
         assert_eq!(todo.len(), 5);
