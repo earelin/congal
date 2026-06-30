@@ -1,34 +1,23 @@
 //! Cliente HTTP e funcións de extracción contra contratosdegalicia.gal.
 
-mod datoscif;
 mod detail;
 mod options;
 mod organismo;
 mod search;
 
-pub use datoscif::{DATOSCIF_BASE, fetch_cargos, fetch_empresa_info, search_entities};
 pub use detail::fetch_detail;
 pub use options::load_filter_options;
 pub use organismo::{fetch_contratos_menores, parse_ano};
 pub use search::search_licitaciones;
 
 use anyhow::Result;
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 pub const BASE: &str = "https://www.contratosdegalicia.gal";
 
-/// Fallos seguidos de datoscif a partir dos cales se considera que está a
-/// bloquear as peticións (normalmente pola IP: devolve 502 ou deixa de
-/// responder). O enriquecemento detense ao chegar a este límite.
-pub const DATOSCIF_LIMITE_FALLOS: u32 = 3;
-
 /// Cliente con cookie de sesión reutilizable.
 pub struct Client {
     http: reqwest::blocking::Client,
-    /// Fallos consecutivos contra datoscif (resétase con calquera éxito). Serve
-    /// para detectar un bloqueo por IP e deter o proceso con limpeza.
-    fallos_datoscif: AtomicU32,
 }
 
 impl Client {
@@ -45,40 +34,11 @@ impl Client {
             .build()?;
         // Primeira chamada para obter cookie de sesión.
         let _ = http.get(format!("{BASE}/portada.jsp?lang=gl")).send();
-        Ok(Client {
-            http,
-            fallos_datoscif: AtomicU32::new(0),
-        })
+        Ok(Client { http })
     }
 
     pub(crate) fn http(&self) -> &reqwest::blocking::Client {
         &self.http
-    }
-
-    /// Rexistra o resultado dunha petición a datoscif: un éxito limpa o contador
-    /// de fallos; un fallo (status non-2xx, timeout, conexión rexeitada…) súmao.
-    pub(crate) fn nota_datoscif(&self, ok: bool) {
-        if ok {
-            self.fallos_datoscif.store(0, Ordering::Relaxed);
-        } else {
-            self.fallos_datoscif.fetch_add(1, Ordering::Relaxed);
-        }
-    }
-
-    /// `true` cando datoscif acumulou demasiados fallos seguidos: trátase como un
-    /// bloqueo por IP e o proceso debe deterse.
-    pub fn datoscif_bloqueado(&self) -> bool {
-        self.fallos_datoscif.load(Ordering::Relaxed) >= DATOSCIF_LIMITE_FALLOS
-    }
-
-    /// Fallos consecutivos acumulados contra datoscif.
-    pub(crate) fn fallos_datoscif(&self) -> u32 {
-        self.fallos_datoscif.load(Ordering::Relaxed)
-    }
-
-    /// Reinicia o contador de fallos de datoscif (ao comezo dun proceso novo).
-    pub fn reset_datoscif(&self) {
-        self.fallos_datoscif.store(0, Ordering::Relaxed);
     }
 }
 
