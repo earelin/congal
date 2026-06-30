@@ -3,8 +3,9 @@
 
 use crate::db::{Db, DbStats, LocalOptions};
 use crate::model::{
-    ContractDetail, EmpresaContratos, EmpresaSortColumn, FilterOptions, GrupoRelacion,
-    ImportParams, LocalFilters, LocalRow, Resolucion, SortColumn, TipoContrato, format_importe,
+    ContractDetail, EmpresaContrato, EmpresaContratos, EmpresaDetalle, EmpresaSortColumn,
+    EmpresaUteMembro, FilterOptions, GrupoRelacion, ImportParams, LocalFilters, LocalRow,
+    Resolucion, SortColumn, TipoContrato, format_importe,
 };
 use crate::theme;
 use crate::worker::{Command, Event, Worker};
@@ -73,6 +74,9 @@ pub struct App {
     /// A táboa de empresas carga progresivamente, igual ca a de contratos.
     empresas_cache: std::collections::HashMap<usize, Vec<EmpresaContratos>>,
     empresas_loaded: bool,
+    /// Empresa seleccionada na pestana Empresas: a súa ficha (contratos directos
+    /// separados por tipo + UTE nas que participa). `None` = amosar o listado.
+    selected_empresa: Option<EmpresaDetalle>,
 
     /// Canle pola que o fío do diálogo nativo «Gardar como» devolve o destino
     /// escollido (`None` se o usuario cancela). Está presente mentres o diálogo
@@ -160,6 +164,7 @@ impl App {
             empresas_importe_total: 0.0,
             empresas_cache: std::collections::HashMap::new(),
             empresas_loaded: false,
+            selected_empresa: None,
             export_rx: None,
         };
         app.refresh_local();
@@ -196,6 +201,7 @@ impl App {
                     self.need_query = true;
                     self.relacions_loaded = false;
                     self.empresas_loaded = false;
+                    self.selected_empresa = None;
                 }
                 Event::Exported(path, n) => {
                     self.busy = false;
@@ -670,6 +676,7 @@ impl App {
                     self.need_query = true;
                     self.relacions_loaded = false;
                     self.empresas_loaded = false;
+                    self.selected_empresa = None;
                 }
 
                 ui.add_space(10.0);
@@ -737,7 +744,13 @@ impl App {
                         self.results_table(ui);
                     }
                 }
-                Tab::Empresas => self.empresas_view(ui),
+                Tab::Empresas => {
+                    if self.selected_empresa.is_some() {
+                        self.empresa_detail_view(ui);
+                    } else {
+                        self.empresas_view(ui);
+                    }
+                }
                 Tab::Relacions => self.relacions_view(ui),
             }
         });
@@ -1213,13 +1226,16 @@ impl App {
         let (cur_col, cur_asc) = (self.local.empresas_sort_col, self.local.empresas_sort_asc);
         let accent = theme::accent(self.dark);
         let mut clicked_header: Option<EmpresaSortColumn> = None;
+        // Empresa premida: ábrese a súa ficha tras a táboa (fóra do préstamo de `cache`).
+        let mut clicked_empresa: Option<EmpresaContratos> = None;
         // As celas non capturan o clic; texto non seleccionable como na táboa de
-        // contratos, para un aspecto coherente.
+        // contratos, para un aspecto coherente. A fila enteira é clicable (`sense`).
         ui.style_mut().interaction.selectable_labels = false;
         TableBuilder::new(ui)
             .id_salt("empresas_table")
             .striped(true)
             .resizable(true)
+            .sense(egui::Sense::click())
             .cell_layout(Layout::left_to_right(Align::Center))
             .column(Column::remainder().at_least(220.0).clip(true))
             .column(Column::initial(120.0).at_least(90.0).clip(true))
@@ -1299,6 +1315,11 @@ impl App {
                             ui.label(format_importe(e.importe_total));
                         });
                     });
+                    let resp = row.response();
+                    resp.clone().on_hover_cursor(egui::CursorIcon::PointingHand);
+                    if resp.clicked() {
+                        clicked_empresa = Some(e.clone());
+                    }
                 });
             });
 
@@ -1321,6 +1342,219 @@ impl App {
                 self.local.empresas_sort_asc = col.default_asc();
             }
             self.empresas_loaded = false;
+        }
+
+        // Abrir a ficha da empresa premida (carga os seus contratos e UTE).
+        if let Some(e) = clicked_empresa {
+            self.open_empresa(&e.nif, &e.nome);
+        }
+    }
+
+    /// Carga a ficha dunha empresa (contratos directos + UTE nas que participa,
+    /// acoutados á busca actual) e amósaa na vista de detalle da pestana Empresas.
+    /// Identifícase pola mesma clave que o listado (NIF, ou clave do nome se non o
+    /// ten); por iso abonda co NIF e o nome, que tamén traen os membros das UTE.
+    fn open_empresa(&mut self, nif: &str, nome: &str) {
+        match self.db.empresa_detalle(&self.local, nif, nome) {
+            Ok(d) => self.selected_empresa = Some(d),
+            Err(err) => self.status = format!("⚠ ficha empresa: {err}"),
+        }
+    }
+
+    /// Ficha da empresa seleccionada: os seus contratos adxudicados directamente
+    /// (separados en licitacións e contratos menores) e as UTE nas que participa
+    /// cos seus contratos. Cada contrato é clicable e salta á súa ficha. Ocupa o
+    /// espazo do listado ata que se volve con "← Volver".
+    fn empresa_detail_view(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            if ui.button("← Volver á lista").clicked() {
+                self.selected_empresa = None;
+            }
+            ui.add_space(8.0);
+            ui.heading("Ficha de empresa");
+        });
+        ui.add_space(6.0);
+        ui.separator();
+        ui.add_space(6.0);
+
+        if self.selected_empresa.is_none() {
+            return;
+        }
+
+        let dark = self.dark;
+        // Cor do vínculo por UTE (a mesma que na vista de relacións).
+        let ute_color = if dark {
+            Color32::from_rgb(0x5A, 0xC8, 0xE0)
+        } else {
+            Color32::from_rgb(0x0A, 0x84, 0xA5)
+        };
+        // Accións premidas dentro da ScrollArea; aplícanse despois (fóra do préstamo
+        // inmutable de `self.selected_empresa`): `jump` salta á ficha dun contrato;
+        // `open_membro` (NIF, nome) abre a ficha doutra empresa relacionada.
+        let mut jump: Option<String> = None;
+        let mut open_membro: Option<(String, String)> = None;
+        let emp = self.selected_empresa.as_ref().unwrap();
+        ScrollArea::vertical().show(ui, |ui| {
+            ui.label(RichText::new(&emp.nome).strong().size(16.0));
+            if !emp.nif.trim().is_empty() {
+                ui.label(
+                    RichText::new(&emp.nif)
+                        .monospace()
+                        .small()
+                        .color(Color32::GRAY),
+                );
+            }
+            ui.add_space(4.0);
+            let total: f64 = emp.contratos.iter().map(|c| c.importe_num).sum();
+            ui.label(
+                RichText::new(format!(
+                    "{} contratos adxudicados directamente · {} en total",
+                    emp.contratos.len(),
+                    format_importe(total),
+                ))
+                .small()
+                .color(Color32::GRAY),
+            );
+
+            // Contratos directos, separados por tipo (licitacións / menores).
+            let licit: Vec<&EmpresaContrato> = emp
+                .contratos
+                .iter()
+                .filter(|c| c.tipo == TipoContrato::Licitacion)
+                .collect();
+            let menores: Vec<&EmpresaContrato> = emp
+                .contratos
+                .iter()
+                .filter(|c| c.tipo == TipoContrato::Menor)
+                .collect();
+            if !licit.is_empty() {
+                ui.add_space(12.0);
+                section_header(ui, &format!("Licitacións ({})", licit.len()));
+                ui.add_space(4.0);
+                if let Some(id) = empresa_contratos_taboa(ui, "ficha_licit", &licit) {
+                    jump = Some(id);
+                }
+            }
+            if !menores.is_empty() {
+                ui.add_space(12.0);
+                section_header(ui, &format!("Contratos menores ({})", menores.len()));
+                ui.add_space(4.0);
+                if let Some(id) = empresa_contratos_taboa(ui, "ficha_menores", &menores) {
+                    jump = Some(id);
+                }
+            }
+            if emp.contratos.is_empty() {
+                ui.add_space(8.0);
+                ui.label(
+                    RichText::new("Sen contratos adxudicados directamente nesta busca.")
+                        .italics()
+                        .color(Color32::GRAY),
+                );
+            }
+
+            // UTE nas que participa a empresa, cos seus contratos.
+            if !emp.utes.is_empty() {
+                ui.add_space(16.0);
+                ui.separator();
+                ui.add_space(6.0);
+                ui.label(
+                    RichText::new(
+                        "Preme nunha UTE para ver as empresas relacionadas e os seus contratos.",
+                    )
+                    .small()
+                    .color(Color32::GRAY),
+                );
+                for (idx, u) in emp.utes.iter().enumerate() {
+                    ui.add_space(6.0);
+                    // As empresas relacionadas son os demais membros da UTE (todos
+                    // menos a propia empresa da ficha).
+                    let relacionadas: Vec<&EmpresaUteMembro> =
+                        u.membros.iter().filter(|m| !m.propia).collect();
+                    let titulo = RichText::new(format!("🤝 {}", u.nome))
+                        .strong()
+                        .color(ute_color);
+                    egui::CollapsingHeader::new(titulo)
+                        .id_salt(egui::Id::new(("ficha_ute", idx)))
+                        .show(ui, |ui| {
+                            // Empresas relacionadas: clicables, abren a súa propia ficha.
+                            if relacionadas.is_empty() {
+                                ui.label(
+                                    RichText::new("Sen outras empresas na UTE.")
+                                        .small()
+                                        .italics()
+                                        .color(Color32::GRAY),
+                                );
+                            } else {
+                                ui.label(
+                                    RichText::new("Empresas relacionadas")
+                                        .small()
+                                        .strong()
+                                        .color(ute_color),
+                                );
+                                ui.style_mut().interaction.selectable_labels = false;
+                                for m in &relacionadas {
+                                    let resp = ui
+                                        .horizontal_wrapped(|ui| {
+                                            ui.label("🏢");
+                                            ui.label(RichText::new(&m.nome).strong());
+                                            if !m.cif.is_empty() {
+                                                ui.label(
+                                                    RichText::new(format!("· {}", m.cif))
+                                                        .small()
+                                                        .monospace()
+                                                        .color(Color32::GRAY),
+                                                );
+                                            }
+                                        })
+                                        .response
+                                        .interact(egui::Sense::click());
+                                    if resp.hovered() {
+                                        resp.clone()
+                                            .on_hover_cursor(egui::CursorIcon::PointingHand);
+                                    }
+                                    if resp.clicked() {
+                                        open_membro = Some((m.cif.clone(), m.nome.clone()));
+                                    }
+                                }
+                            }
+
+                            // Contratos adxudicados á UTE (táboa, igual cós directos).
+                            if !u.contratos.is_empty() {
+                                ui.add_space(6.0);
+                                ui.label(
+                                    RichText::new(format!(
+                                        "Contratos adxudicados á UTE ({}) · {} en total",
+                                        u.contratos.len(),
+                                        format_importe(u.importe_total),
+                                    ))
+                                    .small()
+                                    .strong(),
+                                );
+                                ui.add_space(2.0);
+                                let refs: Vec<&EmpresaContrato> = u.contratos.iter().collect();
+                                if let Some(id) =
+                                    empresa_contratos_taboa(ui, &format!("ficha_ute_{idx}"), &refs)
+                                {
+                                    jump = Some(id);
+                                }
+                            }
+                        });
+                }
+            }
+        });
+
+        // Premer unha empresa relacionada abre a súa ficha (queda na pestana
+        // Empresas). Ten prioridade sobre o salto a contrato.
+        if let Some((nif, nome)) = open_membro {
+            self.open_empresa(&nif, &nome);
+        } else if let Some(id) = jump
+            && let Ok(Some(row)) = self.db.query_local_by_id(&id)
+        {
+            // Saltar á ficha do contrato premido: selecciónase e cámbiase á pestana
+            // Contratos, que amosará a vista de detalle no seguinte fotograma.
+            self.select_contract(row);
+            self.tab = Tab::Contratos;
         }
     }
 
@@ -1519,6 +1753,116 @@ fn render_utes(ui: &mut egui::Ui, utes: &[UteDetalle]) {
             }
         });
     }
+}
+
+/// Renderiza unha **táboa** de contratos da ficha de empresa (unha fila por
+/// contrato; columnas ID/Data/Importe/Organismo/Obxecto, coa data amosando o
+/// ano). Cada fila é clicable e salta á ficha do contrato; devolve o id premido,
+/// se o hai. Sen scroll propio (`vscroll(false)`) para integrarse na ScrollArea
+/// exterior da ficha; `id_salt` debe ser único entre as táboas da mesma vista.
+fn empresa_contratos_taboa(
+    ui: &mut egui::Ui,
+    id_salt: &str,
+    contratos: &[&EmpresaContrato],
+) -> Option<String> {
+    let mut jump: Option<String> = None;
+
+    // Altura de cada fila axustada ao obxecto: como a columna Obxecto reparte
+    // («wrap») o texto en varias liñas, predise canto ocupará. As dúas columnas
+    // `remainder` (Organismo e Obxecto) reparten a partes iguais o espazo
+    // sobrante; subestímase un chisco o ancho para que a altura estimada nunca
+    // quede curta e recorte texto.
+    let spacing_x = ui.spacing().item_spacing.x;
+    let fixos = 64.0 + 96.0 + 120.0;
+    let sobrante = (ui.available_width() - fixos - 4.0 * spacing_x).max(0.0);
+    let obxecto_w = (sobrante / 2.0).max(180.0);
+    let texto_w = (obxecto_w - 8.0).max(40.0); // restar o padding interior da cela
+    let font_id = egui::TextStyle::Body.resolve(ui.style());
+    let cor = ui.visuals().text_color();
+    const FILA_MIN: f32 = 22.0;
+    let alturas: Vec<f32> = contratos
+        .iter()
+        .map(|c| {
+            let galley = ui
+                .painter()
+                .layout(c.asunto.clone(), font_id.clone(), cor, texto_w);
+            (galley.size().y + 8.0).max(FILA_MIN)
+        })
+        .collect();
+
+    // As celas non capturan o clic: así o cursor non entra en modo selección e o
+    // clic chega á fila enteira (`sense(click)`).
+    ui.style_mut().interaction.selectable_labels = false;
+    TableBuilder::new(ui)
+        .id_salt(id_salt)
+        .striped(true)
+        .vscroll(false)
+        .sense(egui::Sense::click())
+        .cell_layout(Layout::left_to_right(Align::Center))
+        .column(Column::initial(64.0).at_least(50.0))
+        .column(Column::initial(96.0).at_least(80.0))
+        .column(Column::initial(120.0).at_least(90.0))
+        .column(
+            Column::remainder()
+                .at_least(140.0)
+                .clip(true)
+                .resizable(false),
+        )
+        .column(Column::remainder().at_least(180.0).resizable(false))
+        .header(22.0, |mut h| {
+            for (t, num) in [
+                ("ID", false),
+                ("Data", false),
+                ("Importe", true),
+                ("Organismo", false),
+                ("Obxecto", false),
+            ] {
+                h.col(|ui| {
+                    pad_cela(ui);
+                    let txt = RichText::new(t).strong();
+                    if num {
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| ui.label(txt));
+                    } else {
+                        ui.label(txt);
+                    }
+                });
+            }
+        })
+        .body(|body| {
+            body.heterogeneous_rows(alturas.into_iter(), |mut row| {
+                let c = contratos[row.index()];
+                row.col(|ui| {
+                    pad_cela(ui);
+                    ui.label(RichText::new(&c.contract_id).monospace());
+                });
+                row.col(|ui| {
+                    pad_cela(ui);
+                    ui.label(&c.publicacion);
+                });
+                row.col(|ui| {
+                    pad_cela(ui);
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        ui.label(&c.importe_txt);
+                    });
+                });
+                row.col(|ui| {
+                    pad_cela(ui);
+                    ui.label(&c.organismo);
+                });
+                row.col(|ui| {
+                    pad_cela(ui);
+                    // O obxecto reparte («wrap») en varias liñas en lugar de
+                    // recortarse: a altura da fila xa se calculou para acollelo.
+                    ui.add(egui::Label::new(&c.asunto).wrap());
+                });
+                let resp = row.response();
+                resp.clone().on_hover_cursor(egui::CursorIcon::PointingHand);
+                if resp.clicked() {
+                    jump = Some(c.contract_id.clone());
+                }
+            });
+        });
+    jump
 }
 
 /// Campo de texto dunha liña con padding interior e ancho completo.

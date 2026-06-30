@@ -1,9 +1,10 @@
 //! Persistencia en SQLite (rusqlite, bundled).
 
 use crate::model::{
-    ContractDetail, ContractSummary, ContratoAdxudicado, EmpresaContratos, EmpresaNodo,
-    GrupoRelacion, LocalFilters, LocalRow, MenorRow, Resolucion, TipoContrato, Ute, UteRelacion,
-    company_key, format_data_gl, format_importe, normalize_search, parse_data, parse_importe,
+    ContractDetail, ContractSummary, ContratoAdxudicado, EmpresaContrato, EmpresaContratos,
+    EmpresaDetalle, EmpresaNodo, EmpresaUte, EmpresaUteMembro, GrupoRelacion, LocalFilters,
+    LocalRow, MenorRow, Resolucion, TipoContrato, Ute, UteRelacion, company_key, format_data_gl,
+    format_importe, normalize_search, parse_data, parse_importe,
 };
 use anyhow::Result;
 use rusqlite::functions::FunctionFlags;
@@ -154,6 +155,23 @@ fn map_local_row(row: &rusqlite::Row) -> rusqlite::Result<LocalRow> {
         // se algún ten participación descoñecida/baleira (CAST → 0) ou maior, non
         // se marca.
         participante_unico: max_part == Some(1) && min_part == Some(1),
+    })
+}
+
+/// Constrúe un [`EmpresaContrato`] a partir dunha fila de
+/// `empresa_contratos_directos` (columnas: id, tipo, asunto, organismo, data, imp).
+fn map_empresa_contrato(row: &rusqlite::Row) -> rusqlite::Result<EmpresaContrato> {
+    let tipo_txt: String = row.get(1)?;
+    let data_iso: String = row.get(4)?;
+    let imp: Option<f64> = row.get(5)?;
+    Ok(EmpresaContrato {
+        contract_id: row.get(0)?,
+        tipo: TipoContrato::from_db(&tipo_txt),
+        asunto: row.get(2)?,
+        organismo: row.get(3)?,
+        publicacion: format_data_gl(&data_iso),
+        importe_num: imp.unwrap_or(0.0),
+        importe_txt: imp.map(format_importe).unwrap_or_default(),
     })
 }
 
@@ -962,6 +980,182 @@ impl Db {
         Ok((n.max(0) as usize, total))
     }
 
+    /// Ficha dunha empresa adxudicataria: os contratos que se lle adxudicaron
+    /// directamente (separables por tipo na vista) e as UTE nas que participa cos
+    /// seus contratos, todo acoutado aos `filtros` do panel lateral (a mesma busca
+    /// que o listado). A empresa identifícase pola súa `ekey` (NIF ou, se non o
+    /// ten, a clave normalizada do nome), reconstruída a partir do NIF/nome que
+    /// amosa o listado de empresas. Úsaa a pestana Empresas ao premer unha empresa.
+    pub fn empresa_detalle(
+        &self,
+        filtros: &LocalFilters,
+        nif: &str,
+        nome: &str,
+    ) -> Result<EmpresaDetalle> {
+        // Mesma clave que agrupa o listado de empresas (`EMPRESAS_EKEY`): NIF se o
+        // hai, e se non a clave do nome. Así a ficha casa coa fila premida.
+        let ekey = if nif.trim().is_empty() {
+            company_key(nome)
+        } else {
+            nif.trim().to_string()
+        };
+        let contratos = self.empresa_contratos_directos(filtros, &ekey)?;
+        let utes = self.empresa_utes(filtros, &ekey)?;
+        Ok(EmpresaDetalle {
+            nome: nome.to_string(),
+            nif: nif.to_string(),
+            contratos,
+            utes,
+        })
+    }
+
+    /// Contratos adxudicados directamente á empresa `ekey` (como adxudicataria
+    /// única ou coadxudicataria) dentro dos `filtros`. Un contrato por fila, co
+    /// importe adxudicado á empresa nese contrato; ordenados por data descendente.
+    fn empresa_contratos_directos(
+        &self,
+        filtros: &LocalFilters,
+        ekey: &str,
+    ) -> Result<Vec<EmpresaContrato>> {
+        let (where_sql, mut args) = local_where(filtros);
+        let filtrados = filtrados_cte(&where_sql);
+        // O último parámetro posicional é a clave da empresa (despois dos do
+        // `local_where`, que aparecen antes na CTE `filtrados`).
+        args.push(ekey.to_string());
+        let sql = format!(
+            "WITH {filtrados} \
+             SELECT c.id, COALESCE(c.tipo,'licitacion'), COALESCE(c.asunto,''), \
+                    COALESCE(o.nome,''), COALESCE(c.data_publicacion,''), \
+                    SUM(r.importe_resolucion_num) AS imp \
+             FROM contract_resolucion r \
+             JOIN contracts c ON c.id = r.contract_id \
+             LEFT JOIN organismos o ON o.cod_organismo = c.cod_organismo \
+             WHERE r.contract_id IN (SELECT id FROM filtrados) \
+               AND {EMPRESAS_EKEY} = ? \
+             GROUP BY c.id \
+             ORDER BY c.data_publicacion DESC, CAST(c.id AS INTEGER) DESC"
+        );
+        let params: Vec<&dyn rusqlite::ToSql> =
+            args.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(params.as_slice(), map_empresa_contrato)?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    /// UTE nas que a empresa `ekey` figura como membro, cos contratos adxudicados
+    /// a cada UTE dentro dos `filtros`. A empresa identifícase entre os membros pola
+    /// mesma clave (CIF, ou clave do nome se non o ten). O importe da UTE nun
+    /// contrato é a suma das resolucións cuxo adxudicatario casa coa UTE (vía cokey),
+    /// igual ca na vista de relacións.
+    fn empresa_utes(&self, filtros: &LocalFilters, ekey: &str) -> Result<Vec<EmpresaUte>> {
+        use std::collections::HashSet;
+        let (where_sql, mut args) = local_where(filtros);
+        let filtrados = filtrados_cte(&where_sql);
+        args.push(ekey.to_string());
+        // `parts`: pares (contrato, UTE) nos que a empresa é membro. Despois
+        // reúnese a composición completa da UTE e o importe adxudicado.
+        let sql = format!(
+            "WITH {filtrados}, \
+             parts AS ( \
+                SELECT DISTINCT um.contract_id AS cid, um.ute_key AS uk \
+                FROM ute_membro um \
+                WHERE um.contract_id IN (SELECT id FROM filtrados) \
+                  AND COALESCE(NULLIF(TRIM(um.membro_cif),''), cokey(um.membro_nome)) = ? \
+             ), \
+             ute_imp AS (SELECT r.contract_id AS cid, cokey(r.adxudicatario) AS k, \
+                                SUM(r.importe_resolucion_num) AS imp \
+                         FROM contract_resolucion r GROUP BY r.contract_id, cokey(r.adxudicatario)) \
+             SELECT p.uk, um.ute_nome, p.cid, COALESCE(c.tipo,'licitacion'), \
+                    COALESCE(c.asunto,''), COALESCE(o.nome,''), \
+                    COALESCE(c.data_publicacion,''), ui.imp, um.membro_nome, \
+                    COALESCE(um.membro_cif,'') \
+             FROM parts p \
+             JOIN ute_membro um ON um.contract_id = p.cid AND um.ute_key = p.uk \
+             JOIN contracts c ON c.id = p.cid \
+             LEFT JOIN organismos o ON o.cod_organismo = c.cod_organismo \
+             LEFT JOIN ute_imp ui ON ui.cid = p.cid AND ui.k = p.uk \
+             ORDER BY p.uk, CAST(p.cid AS INTEGER) DESC, um.membro_nome COLLATE NOCASE"
+        );
+        // Acumúlase por UTE (`uk`): as filas da mesma UTE veñen contiguas. Cada UTE
+        // reúne os seus membros distintos e os seus contratos distintos.
+        struct Build {
+            nome: String,
+            membros: Vec<EmpresaUteMembro>,
+            membros_vistos: HashSet<String>,
+            contratos: Vec<EmpresaContrato>,
+            contratos_vistos: HashSet<String>,
+        }
+        let mut builds: Vec<Build> = Vec::new();
+        {
+            let params: Vec<&dyn rusqlite::ToSql> =
+                args.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+            let mut stmt = self.conn.prepare(&sql)?;
+            let mut rows = stmt.query(params.as_slice())?;
+            let mut actual: Option<String> = None;
+            while let Some(row) = rows.next()? {
+                let uk: String = row.get(0)?;
+                if actual.as_ref() != Some(&uk) {
+                    actual = Some(uk);
+                    builds.push(Build {
+                        nome: row.get(1)?,
+                        membros: Vec::new(),
+                        membros_vistos: HashSet::new(),
+                        contratos: Vec::new(),
+                        contratos_vistos: HashSet::new(),
+                    });
+                }
+                let b = builds.last_mut().unwrap();
+                let membro_nome: String = row.get(8)?;
+                let membro_cif: String = row.get(9)?;
+                // Clave do membro (igual ca `ekey`): CIF se o hai, e se non a clave
+                // do nome. Serve para deduplicar e para saber se é a propia empresa.
+                let mkey = if membro_cif.trim().is_empty() {
+                    company_key(&membro_nome)
+                } else {
+                    membro_cif.trim().to_string()
+                };
+                if b.membros_vistos.insert(mkey.clone()) {
+                    b.membros.push(EmpresaUteMembro {
+                        propia: mkey == ekey,
+                        nome: membro_nome,
+                        cif: membro_cif,
+                    });
+                }
+                // Columnas 2..8 = (contrato_id, tipo, asunto, organismo, data, imp),
+                // o mesmo formato que `map_empresa_contrato` pero desprazado 2 posicións.
+                let cid: String = row.get(2)?;
+                if b.contratos_vistos.insert(cid.clone()) {
+                    let tipo_txt: String = row.get(3)?;
+                    let data_iso: String = row.get(6)?;
+                    let imp: Option<f64> = row.get(7)?;
+                    b.contratos.push(EmpresaContrato {
+                        contract_id: cid,
+                        tipo: TipoContrato::from_db(&tipo_txt),
+                        asunto: row.get(4)?,
+                        organismo: row.get(5)?,
+                        publicacion: format_data_gl(&data_iso),
+                        importe_num: imp.unwrap_or(0.0),
+                        importe_txt: imp.map(format_importe).unwrap_or_default(),
+                    });
+                }
+            }
+        }
+        let out = builds
+            .into_iter()
+            .map(|b| EmpresaUte {
+                nome: b.nome,
+                membros: b.membros,
+                importe_total: b.contratos.iter().map(|c| c.importe_num).sum(),
+                contratos: b.contratos,
+            })
+            .collect();
+        Ok(out)
+    }
+
     /// Grupos (tramas) de razóns sociais que concorreron xuntas nunha mesma UTE
     /// adxudicataria. Cada grupo é unha compoñente conexa do grafo empresa↔empresa
     /// onde a aresta é a coparticipación nunha UTE. Constrúese só con datos de
@@ -1752,6 +1946,128 @@ mod tests {
         // O contrato e o importe cóntanse unha soa vez (non por cada membro).
         assert_eq!(g.contratos.len(), 1);
         assert_eq!(g.importe_total, 1000.0);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    // A ficha de empresa reúne os contratos adxudicados directamente (separables
+    // por tipo) e as UTE nas que participa, todo acoutado á busca local.
+    #[test]
+    fn ficha_de_empresa_reune_contratos_e_utes() {
+        use crate::model::{MenorRow, Ute, UteMembro};
+        let path = std::env::temp_dir().join("congal_test_ficha_empresa.sqlite");
+        let _ = std::fs::remove_file(&path);
+        let mut db = Db::open(&path).expect("db");
+
+        // Dúas licitacións: a 1 adxudicada directamente a A; a 3 a unha UTE de A+C.
+        db.upsert_summaries(
+            &[
+                summary("1", "obra", "Org", "Formalizado", "01/02/2025"),
+                summary("3", "ute", "Org", "Formalizado", "05/02/2025"),
+            ],
+            "agora",
+        )
+        .expect("summaries");
+        db.upsert_detail(
+            &ContractDetail {
+                contract_id: "1".into(),
+                ..Default::default()
+            },
+            &[Resolucion {
+                adxudicatario: "Empresa A SL".into(),
+                nif: "B111".into(),
+                importe_num: Some(1000.0),
+                ..Default::default()
+            }],
+        )
+        .expect("d1");
+        db.upsert_detail(
+            &ContractDetail {
+                contract_id: "3".into(),
+                ..Default::default()
+            },
+            &[Resolucion {
+                adxudicatario: "UTE A - C".into(),
+                importe_num: Some(2000.0),
+                ..Default::default()
+            }],
+        )
+        .expect("d3");
+        db.upsert_utes(
+            "3",
+            &[Ute {
+                nome: "UTE A - C".into(),
+                nif: "U99999999".into(),
+                membros: vec![
+                    UteMembro {
+                        cif: "B111".into(),
+                        nome: "EMPRESA A".into(),
+                    },
+                    UteMembro {
+                        cif: "C333".into(),
+                        nome: "EMPRESA C".into(),
+                    },
+                ],
+            }],
+        )
+        .expect("utes");
+        // Un contrato menor adxudicado directamente a A (mesmo NIF).
+        db.upsert_menores(
+            "OR-Org",
+            "Org",
+            &[MenorRow {
+                id: 2,
+                publicado: "03/02/2025".into(),
+                objeto: "subministro".into(),
+                importe: Some(500.0),
+                nif: "B111".into(),
+                adjudicatario: "Empresa A SL".into(),
+                duracion: "1 mes".into(),
+            }],
+            "agora",
+        )
+        .expect("menores");
+
+        let ficha = db
+            .empresa_detalle(&LocalFilters::default(), "B111", "Empresa A SL")
+            .expect("ficha");
+
+        // Contratos directos: a licitación 1 e o menor 2 (NON a UTE).
+        assert_eq!(ficha.contratos.len(), 2);
+        let licit: Vec<_> = ficha
+            .contratos
+            .iter()
+            .filter(|c| c.tipo == TipoContrato::Licitacion)
+            .collect();
+        let menores: Vec<_> = ficha
+            .contratos
+            .iter()
+            .filter(|c| c.tipo == TipoContrato::Menor)
+            .collect();
+        assert_eq!(licit.len(), 1, "unha licitación directa");
+        assert_eq!(licit[0].contract_id, "1");
+        assert_eq!(licit[0].importe_num, 1000.0);
+        assert_eq!(menores.len(), 1, "un contrato menor directo");
+        assert_eq!(menores[0].contract_id, "2");
+        assert_eq!(menores[0].importe_num, 500.0);
+
+        // UTE na que participa: a UTE A - C, co contrato 3 e o seu importe.
+        assert_eq!(ficha.utes.len(), 1, "unha UTE");
+        let u = &ficha.utes[0];
+        assert!(u.nome.contains("UTE A"));
+        assert_eq!(u.membros.len(), 2, "os dous membros da UTE");
+        // A propia empresa (A) márcase como `propia`; a relacionada (C) non.
+        let propias = u.membros.iter().filter(|m| m.propia).count();
+        assert_eq!(propias, 1, "só a propia empresa se marca");
+        let relacionada = u.membros.iter().find(|m| !m.propia).expect("relacionada");
+        assert!(
+            relacionada.nome.contains('C'),
+            "a relacionada é a empresa C"
+        );
+        assert_eq!(relacionada.cif, "C333");
+        assert_eq!(u.contratos.len(), 1);
+        assert_eq!(u.contratos[0].contract_id, "3");
+        assert_eq!(u.importe_total, 2000.0);
 
         let _ = std::fs::remove_file(&path);
     }

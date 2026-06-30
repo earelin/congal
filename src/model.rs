@@ -286,6 +286,64 @@ pub struct EmpresaContratos {
     pub importe_total: f64,
 }
 
+/// Un contrato concreto adxudicado a unha empresa, directamente ou a través
+/// dunha UTE da que é membro. Úsao a ficha de empresa (`db::empresa_detalle`)
+/// para listar os contratos da empresa dentro da busca actual. O `importe_num`
+/// é o adxudicado nese contrato á empresa (ou á súa UTE).
+#[derive(Debug, Clone)]
+pub struct EmpresaContrato {
+    pub contract_id: String,
+    pub tipo: TipoContrato,
+    pub asunto: String,
+    pub organismo: String,
+    /// Data de publicación formatada como DD/MM/YYYY.
+    pub publicacion: String,
+    pub importe_num: f64,
+    pub importe_txt: String,
+}
+
+/// Unha empresa membro dunha UTE na ficha de empresa: o seu nome, o CIF (para
+/// abrir a súa propia ficha ao premela) e se é a propia empresa da ficha.
+#[derive(Debug, Clone)]
+pub struct EmpresaUteMembro {
+    pub nome: String,
+    /// CIF do membro (baleiro se non se coñece).
+    pub cif: String,
+    /// `true` se este membro é a propia empresa da ficha (non conta como
+    /// «relacionada» ao premer a UTE).
+    pub propia: bool,
+}
+
+/// Unha UTE na que participa unha empresa, coas razóns sociais que a compoñen
+/// (as empresas relacionadas) e os contratos que se lle adxudicaron dentro da
+/// busca actual. Forma parte da ficha de empresa (`db::empresa_detalle`).
+#[derive(Debug, Clone)]
+pub struct EmpresaUte {
+    pub nome: String,
+    /// Razóns sociais que compoñen a UTE (inclúe a propia empresa, marcada con
+    /// `propia`). As demais son as «empresas relacionadas».
+    pub membros: Vec<EmpresaUteMembro>,
+    /// Contratos adxudicados a esta UTE dentro da busca actual.
+    pub contratos: Vec<EmpresaContrato>,
+    /// Suma dos importes adxudicados á UTE en `contratos`.
+    pub importe_total: f64,
+}
+
+/// Ficha detallada dunha empresa adxudicataria: os contratos que se lle
+/// adxudicaron directamente (separables por tipo na vista) e as UTE nas que
+/// participa cos seus contratos, todo acoutado á busca local actual. Constrúea
+/// `db::empresa_detalle` ao premer unha empresa no listado da pestana Empresas.
+#[derive(Debug, Clone)]
+pub struct EmpresaDetalle {
+    pub nome: String,
+    pub nif: String,
+    /// Contratos adxudicados directamente á empresa (como adxudicataria única
+    /// ou coadxudicataria), dentro da busca actual.
+    pub contratos: Vec<EmpresaContrato>,
+    /// UTE nas que participa a empresa, cos seus contratos.
+    pub utes: Vec<EmpresaUte>,
+}
+
 /// Unha razón social que forma parte dun grupo por compartir UTE con outras.
 #[derive(Debug, Clone)]
 pub struct EmpresaNodo {

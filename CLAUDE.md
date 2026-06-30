@@ -47,7 +47,13 @@ The data flow is: **GUI → Worker thread → scraper/sync/db → events back to
   (local listing + contract detail) split into **two sub-tabs** — `Licitacións` and `Contratos
   menores` (`sub_tab: TipoContrato`, drives `LocalFilters.tipo`; the menores table swaps the
   Estado/Imp.resolución columns for NIF/Duración) — plus `Empresas` (one row per awardee:
-  name, NIF, nº of contracts and total awarded, via `db::empresas_con_contratos`) and
+  name, NIF, nº of contracts and total awarded, via `db::empresas_con_contratos`; clicking a row
+  opens a per-company **ficha** — `db::empresa_detalle` — listing the contracts awarded
+  **directly** to it in **tables** (ID/Data/Importe/Organismo/Obxecto, the Data column showing the
+  year), split into separate Licitacións and Contratos menores tables, plus the **UTEs it is a
+  member of** as collapsible headers — expanding one reveals the **related companies** (the other
+  UTE members, each clickable to open *its* ficha) and a table of the UTE's awarded contracts;
+  every contract row jumps to its detail) and
   `Relacions` (tramas **derived only from shared UTE membership**). The Empresas and Relacións
   tabs honour the side-panel filters but, unlike Contratos, ignore the licitación/menor sub-tab
   (they consider both contract types). The UI **never blocks on I/O**: it sends `Command`s to the
@@ -135,7 +141,14 @@ The data flow is: **GUI → Worker thread → scraper/sync/db → events back to
   `empresas_con_contratos` powers the Empresas tab: it aggregates `contract_resolucion` over the
   filtered contracts (same `local_where` CTE as the relations view), grouping awardees by NIF
   (or `cokey(adxudicatario)` when no NIF) into `EmpresaContratos` (name, NIF, distinct contract
-  count, summed importe), ordered by total awarded descending. It also
+  count, summed importe), ordered by total awarded descending. `empresa_detalle` backs the
+  per-company ficha (click a row in Empresas): it keys the company by `ekey` (NIF, else
+  `cokey(nome)`) and returns an `EmpresaDetalle` with its **direct** contracts (`EmpresaContrato`
+  rows, one per contract with the importe awarded to it, carrying `tipo` so the UI splits
+  licitacións/menores) plus the **UTEs it is a member of** (`EmpresaUte`: members as
+  `EmpresaUteMembro` — name + CIF + a `propia` flag marking the queried company so the UI lists the
+  *others* as related, clickable companies — and the UTE's awarded contracts, importe attributed
+  via `cokey` like the relations view) — all scoped by the same `local_where` filters. It also
   flags `LocalRow.participante_unico` (`MAX(participacion) == 1`) so the listing marks single-bidder
   contracts with a ⚠ icon (a possible irregularity signal). The listing is sortable by clicking a
   column header: `LocalFilters.sort_col`/`sort_asc` drive a dynamic `ORDER BY`
@@ -152,7 +165,8 @@ The data flow is: **GUI → Worker thread → scraper/sync/db → events back to
   `Ute`/`UteMembro` (contract data), and `EmpresaNodo`/`UteRelacion`/`ContratoAdxudicado`/
   `GrupoRelacion` (the UTE-only trama returned by `db::relacions_compartidas`).
   `EmpresaContratos` (name, NIF, contract count, total awarded) backs the Empresas tab via
-  `db::empresas_con_contratos`.
+  `db::empresas_con_contratos`; `EmpresaDetalle` (+ `EmpresaContrato`/`EmpresaUte`/
+  `EmpresaUteMembro`) backs the per-company ficha via `db::empresa_detalle`.
 
 - **`export.rs`** — writes the filtered local rows to an OpenDocument Spreadsheet (`.ods`)
   via `spreadsheet-ods`.
