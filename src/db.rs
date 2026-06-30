@@ -1,9 +1,9 @@
 //! Persistencia en SQLite (rusqlite, bundled).
 
 use crate::model::{
-    ContractDetail, ContractSummary, ContratoAdxudicado, EmpresaNodo, GrupoRelacion, LocalFilters,
-    LocalRow, MenorRow, Resolucion, TipoContrato, Ute, UteRelacion, company_key, format_data_gl,
-    format_importe, normalize_search, parse_data, parse_importe,
+    ContractDetail, ContractSummary, ContratoAdxudicado, EmpresaContratos, EmpresaNodo,
+    GrupoRelacion, LocalFilters, LocalRow, MenorRow, Resolucion, TipoContrato, Ute, UteRelacion,
+    company_key, format_data_gl, format_importe, normalize_search, parse_data, parse_importe,
 };
 use anyhow::Result;
 use rusqlite::functions::FunctionFlags;
@@ -72,6 +72,20 @@ fn local_where(f: &LocalFilters) -> (String, Vec<String>) {
         args.push(format!("%{}%", normalize_search(&f.adxudicatario)));
     }
     (sql, args)
+}
+
+/// CTE `filtrados`: os ids dos contratos que casan cos filtros do panel lateral
+/// (a mesma base que o listado local). `where_sql` é a cláusula que devolve
+/// [`local_where`]; os seus argumentos pásanse por posición na consulta final.
+/// Compártena as vistas que agregan sobre os contratos filtrados (empresas e
+/// relacións), que prefixan `WITH ` e fan `... IN (SELECT id FROM filtrados)`.
+fn filtrados_cte(where_sql: &str) -> String {
+    format!(
+        "filtrados AS (SELECT c.id FROM contracts c \
+           LEFT JOIN organismos o ON o.cod_organismo = c.cod_organismo \
+           LEFT JOIN estados e ON e.cod_estado = c.cod_estado \
+           WHERE 1=1{where_sql})"
+    )
 }
 
 /// SELECT + FROM común do listado local (unha fila por contrato, cos lotes/
@@ -833,6 +847,49 @@ impl Db {
         Ok(out)
     }
 
+    /// Lista de empresas adxudicatarias dos contratos que casan cos `filtros`
+    /// (os mesmos do panel lateral), agregando o número de contratos distintos e
+    /// a suma dos importes adxudicados a cada empresa. A empresa identifícase
+    /// polo seu NIF; se non se coñece, pola clave normalizada do nome
+    /// (`cokey`). Consideran os dous tipos de contrato (licitacións e menores),
+    /// igual ca a vista de relacións. Ordénase por importe total descendente.
+    pub fn empresas_con_contratos(&self, filtros: &LocalFilters) -> Result<Vec<EmpresaContratos>> {
+        let (where_sql, args) = local_where(filtros);
+        let params: Vec<&dyn rusqlite::ToSql> =
+            args.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+        let filtrados = filtrados_cte(&where_sql);
+        // Unha empresa por clave (`ekey` = NIF, ou clave do nome se non hai NIF).
+        // O nome e o NIF amosados son representativos (MAX) por se a mesma empresa
+        // aparece con grafías distintas. Só contan as resolucións con adxudicatario.
+        let sql = format!(
+            "WITH {filtrados} \
+             SELECT COALESCE(NULLIF(TRIM(r.nif),''), cokey(r.adxudicatario)) AS ekey, \
+                    MAX(TRIM(r.adxudicatario)) AS nome, \
+                    MAX(COALESCE(TRIM(r.nif),'')) AS nif, \
+                    COUNT(DISTINCT r.contract_id) AS num_contratos, \
+                    SUM(r.importe_resolucion_num) AS importe_total \
+             FROM contract_resolucion r \
+             WHERE r.contract_id IN (SELECT id FROM filtrados) \
+               AND TRIM(COALESCE(r.adxudicatario,'')) <> '' \
+             GROUP BY ekey \
+             ORDER BY importe_total DESC NULLS LAST, num_contratos DESC, nome COLLATE NOCASE"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(params.as_slice(), |row| {
+            Ok(EmpresaContratos {
+                nome: row.get::<_, String>(1)?,
+                nif: row.get::<_, String>(2)?,
+                num_contratos: row.get::<_, i64>(3)?,
+                importe_total: row.get::<_, Option<f64>>(4)?.unwrap_or(0.0),
+            })
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
     /// Grupos (tramas) de razóns sociais que concorreron xuntas nunha mesma UTE
     /// adxudicataria. Cada grupo é unha compoñente conexa do grafo empresa↔empresa
     /// onde a aresta é a coparticipación nunha UTE. Constrúese só con datos de
@@ -846,12 +903,7 @@ impl Db {
         let params = || -> Vec<&dyn rusqlite::ToSql> {
             args.iter().map(|s| s as &dyn rusqlite::ToSql).collect()
         };
-        let filtrados = format!(
-            "filtrados AS (SELECT c.id FROM contracts c \
-               LEFT JOIN organismos o ON o.cod_organismo = c.cod_organismo \
-               LEFT JOIN estados e ON e.cod_estado = c.cod_estado \
-               WHERE 1=1{where_sql})"
-        );
+        let filtrados = filtrados_cte(&where_sql);
         // Composición das UTE dos contratos filtrados, co importe total da UTE
         // (suma das resolucións cuxo adxudicatario casa coa UTE vía cokey) e os
         // datos do contrato. Unha fila por membro; a clave do nó empresa é o CIF
@@ -1139,6 +1191,84 @@ mod tests {
             .expect("a consulta non debe fallar con adxudicatario NULL");
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].id, "1");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    // A vista de empresas agrupa por NIF, conta os contratos distintos e suma os
+    // importes adxudicados a cada empresa, ordenando por importe descendente.
+    #[test]
+    fn empresas_agrega_contratos_e_importes() {
+        let path = std::env::temp_dir().join("congal_test_empresas.sqlite");
+        let _ = std::fs::remove_file(&path);
+        let mut db = Db::open(&path).expect("db");
+        db.upsert_summaries(
+            &[
+                summary("1", "a", "Org", "Adxudicado", "01/02/2025"),
+                summary("2", "b", "Org", "Adxudicado", "02/02/2025"),
+            ],
+            "agora",
+        )
+        .expect("sum");
+        // Empresa A adxudicataria nos dous contratos (mesmo NIF, distinta grafía).
+        db.upsert_detail(
+            &ContractDetail {
+                contract_id: "1".into(),
+                ..Default::default()
+            },
+            &[Resolucion {
+                adxudicatario: "Empresa A SL".into(),
+                nif: "B111".into(),
+                importe_num: Some(1000.0),
+                ..Default::default()
+            }],
+        )
+        .expect("d1");
+        db.upsert_detail(
+            &ContractDetail {
+                contract_id: "2".into(),
+                ..Default::default()
+            },
+            &[
+                Resolucion {
+                    adxudicatario: "EMPRESA A, S.L.".into(),
+                    nif: "B111".into(),
+                    importe_num: Some(500.0),
+                    ..Default::default()
+                },
+                Resolucion {
+                    adxudicatario: "Empresa B SL".into(),
+                    nif: "B222".into(),
+                    importe_num: Some(200.0),
+                    ..Default::default()
+                },
+            ],
+        )
+        .expect("d2");
+
+        let empresas = db
+            .empresas_con_contratos(&LocalFilters::default())
+            .expect("empresas");
+        assert_eq!(empresas.len(), 2);
+        // Orde por importe total descendente: A (1500) antes de B (200).
+        assert_eq!(empresas[0].nif, "B111");
+        assert_eq!(empresas[0].num_contratos, 2);
+        assert_eq!(empresas[0].importe_total, 1500.0);
+        assert_eq!(empresas[1].nif, "B222");
+        assert_eq!(empresas[1].num_contratos, 1);
+        assert_eq!(empresas[1].importe_total, 200.0);
+
+        // O filtro por organismo (panel lateral) aplícase tamén a esta vista.
+        let f = LocalFilters {
+            organismo: "inexistente".into(),
+            ..Default::default()
+        };
+        assert!(
+            db.empresas_con_contratos(&f)
+                .expect("empresas filtr")
+                .is_empty(),
+            "un filtro que non casa con ningún contrato non devolve empresas"
+        );
 
         let _ = std::fs::remove_file(&path);
     }

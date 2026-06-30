@@ -43,12 +43,15 @@ The data flow is: **GUI → Worker thread → scraper/sync/db → events back to
   e.g. `~/.local/share/congal/contratos.sqlite`) and `system_dark()`.
 
 - **`app.rs`** — all egui UI, single `App` struct holding the full UI state. Import runs from a
-  modal dialog (pick **one organismo** + a **year**). The main view has two tabs: `Contratos`
+  modal dialog (pick **one organismo** + a **year**). The main view has three tabs: `Contratos`
   (local listing + contract detail) split into **two sub-tabs** — `Licitacións` and `Contratos
   menores` (`sub_tab: TipoContrato`, drives `LocalFilters.tipo`; the menores table swaps the
-  Estado/Imp.resolución columns for NIF/Duración) — plus `Relacions` (tramas **derived only from
-  shared UTE membership**). The UI **never blocks on I/O**: it sends `Command`s to the worker and
-  drains `Event`s each frame.
+  Estado/Imp.resolución columns for NIF/Duración) — plus `Empresas` (one row per awardee:
+  name, NIF, nº of contracts and total awarded, via `db::empresas_con_contratos`) and
+  `Relacions` (tramas **derived only from shared UTE membership**). The Empresas and Relacións
+  tabs honour the side-panel filters but, unlike Contratos, ignore the licitación/menor sub-tab
+  (they consider both contract types). The UI **never blocks on I/O**: it sends `Command`s to the
+  worker and drains `Event`s each frame.
 
 - **`worker.rs`** — the concurrency boundary. `Worker::spawn` starts one background thread
   owning the HTTP `Client` and the `Db`. Communication is two `mpsc` channels (`Command`
@@ -128,7 +131,11 @@ The data flow is: **GUI → Worker thread → scraper/sync/db → events back to
   listing loads **progressively**: the UI calls `count_local` for the total and
   `query_local_page(offset,limit)` to fetch 8000-row chunks on demand as the virtual table
   scrolls (cached per chunk in `App.row_cache`); `query_local_by_id` fetches a single row for
-  jump-to-contract. `query_local` (unbounded) still backs the ODS export. It also
+  jump-to-contract. `query_local` (unbounded) still backs the ODS export.
+  `empresas_con_contratos` powers the Empresas tab: it aggregates `contract_resolucion` over the
+  filtered contracts (same `local_where` CTE as the relations view), grouping awardees by NIF
+  (or `cokey(adxudicatario)` when no NIF) into `EmpresaContratos` (name, NIF, distinct contract
+  count, summed importe), ordered by total awarded descending. It also
   flags `LocalRow.participante_unico` (`MAX(participacion) == 1`) so the listing marks single-bidder
   contracts with a ⚠ icon (a possible irregularity signal). The listing is sortable by clicking a
   column header: `LocalFilters.sort_col`/`sort_asc` drive a dynamic `ORDER BY`
@@ -144,6 +151,8 @@ The data flow is: **GUI → Worker thread → scraper/sync/db → events back to
   alphanumerics, used by `detail.rs` to compare CIFs). The UTE/relations types live here too:
   `Ute`/`UteMembro` (contract data), and `EmpresaNodo`/`UteRelacion`/`ContratoAdxudicado`/
   `GrupoRelacion` (the UTE-only trama returned by `db::relacions_compartidas`).
+  `EmpresaContratos` (name, NIF, contract count, total awarded) backs the Empresas tab via
+  `db::empresas_con_contratos`.
 
 - **`export.rs`** — writes the filtered local rows to an OpenDocument Spreadsheet (`.ods`)
   via `spreadsheet-ods`.

@@ -3,8 +3,8 @@
 
 use crate::db::{Db, DbStats, LocalOptions};
 use crate::model::{
-    ContractDetail, FilterOptions, GrupoRelacion, ImportParams, LocalFilters, LocalRow, Resolucion,
-    SortColumn, TipoContrato, format_importe,
+    ContractDetail, EmpresaContratos, FilterOptions, GrupoRelacion, ImportParams, LocalFilters,
+    LocalRow, Resolucion, SortColumn, TipoContrato, format_importe,
 };
 use crate::theme;
 use crate::worker::{Command, Event, Worker};
@@ -63,6 +63,9 @@ pub struct App {
     /// Vista de relacións: grupos (tramas) de razóns sociais interconectadas.
     relacions: Vec<GrupoRelacion>,
     relacions_loaded: bool,
+    /// Vista de empresas: listado de adxudicatarios da busca actual.
+    empresas: Vec<EmpresaContratos>,
+    empresas_loaded: bool,
 
     /// Canle pola que o fío do diálogo nativo «Gardar como» devolve o destino
     /// escollido (`None` se o usuario cancela). Está presente mentres o diálogo
@@ -75,6 +78,8 @@ pub struct App {
 enum Tab {
     /// Listado de contratos (e o detalle dun contrato seleccionado).
     Contratos,
+    /// Listado de empresas adxudicatarias coa súa contratación agregada.
+    Empresas,
     /// Tramas de razóns sociais relacionadas entre si.
     Relacions,
 }
@@ -144,6 +149,8 @@ impl App {
             sub_tab: TipoContrato::Licitacion,
             relacions: Vec::new(),
             relacions_loaded: false,
+            empresas: Vec::new(),
+            empresas_loaded: false,
             export_rx: None,
         };
         app.refresh_local();
@@ -178,6 +185,8 @@ impl App {
                     self.stats = self.db.stats().unwrap_or_default();
                     self.local_options = self.db.local_options().unwrap_or_default();
                     self.need_query = true;
+                    self.relacions_loaded = false;
+                    self.empresas_loaded = false;
                 }
                 Event::Exported(path, n) => {
                     self.busy = false;
@@ -303,6 +312,14 @@ impl App {
             .relacions_compartidas(&self.local)
             .unwrap_or_default();
         self.relacions_loaded = true;
+    }
+
+    fn refresh_empresas(&mut self) {
+        self.empresas = self
+            .db
+            .empresas_con_contratos(&self.local)
+            .unwrap_or_default();
+        self.empresas_loaded = true;
     }
 }
 
@@ -610,6 +627,7 @@ impl App {
                 if changed {
                     self.need_query = true;
                     self.relacions_loaded = false;
+                    self.empresas_loaded = false;
                 }
 
                 ui.add_space(10.0);
@@ -653,6 +671,12 @@ impl App {
                     self.tab = Tab::Contratos;
                 }
                 if ui
+                    .selectable_label(self.tab == Tab::Empresas, "🏢 Empresas")
+                    .clicked()
+                {
+                    self.tab = Tab::Empresas;
+                }
+                if ui
                     .selectable_label(self.tab == Tab::Relacions, "🔗 Relacións")
                     .clicked()
                 {
@@ -671,6 +695,7 @@ impl App {
                         self.results_table(ui);
                     }
                 }
+                Tab::Empresas => self.empresas_view(ui),
                 Tab::Relacions => self.relacions_view(ui),
             }
         });
@@ -1091,6 +1116,110 @@ impl App {
             // Composición das UTE adxudicatarias (empresas membro).
             render_utes(ui, &self.selected_utes);
         });
+    }
+
+    /// Vista de empresas: listado de todas as razóns sociais adxudicatarias na
+    /// busca actual, co seu NIF, número de contratos e importe total adxudicado.
+    fn empresas_view(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(6.0);
+        ui.heading("Empresas adxudicatarias");
+        ui.label(
+            RichText::new(
+                "Todas as razóns sociais ás que se lles adxudicou algún contrato na busca \
+                 actual (licitacións e contratos menores). Para cada unha, o seu NIF, o número \
+                 de contratos nos que é adxudicataria e a suma dos importes adxudicados.",
+            )
+            .small()
+            .color(Color32::GRAY),
+        );
+        ui.add_space(6.0);
+        ui.separator();
+        ui.add_space(6.0);
+
+        if !self.empresas_loaded {
+            self.refresh_empresas();
+        }
+        if self.empresas.is_empty() {
+            ui.add_space(10.0);
+            ui.label(
+                RichText::new("Non hai empresas adxudicatarias na busca actual.")
+                    .italics()
+                    .color(Color32::GRAY),
+            );
+            return;
+        }
+
+        // Resumo: nº de empresas e importe total adxudicado (suma de todas).
+        let importe_total: f64 = self.empresas.iter().map(|e| e.importe_total).sum();
+        ui.label(
+            RichText::new(format!(
+                "{} empresas · {} adxudicado en total",
+                self.empresas.len(),
+                format_importe(importe_total),
+            ))
+            .small()
+            .color(Color32::GRAY),
+        );
+        ui.add_space(4.0);
+
+        let empresas = &self.empresas;
+        // As celas non capturan o clic; texto non seleccionable como na táboa de
+        // contratos, para un aspecto coherente.
+        ui.style_mut().interaction.selectable_labels = false;
+        TableBuilder::new(ui)
+            .id_salt("empresas_table")
+            .striped(true)
+            .resizable(true)
+            .cell_layout(Layout::left_to_right(Align::Center))
+            .column(Column::remainder().at_least(220.0).clip(true))
+            .column(Column::initial(120.0).at_least(90.0).clip(true))
+            .column(Column::initial(100.0).at_least(80.0))
+            .column(Column::initial(140.0).at_least(110.0))
+            .header(24.0, |mut h| {
+                for (t, num) in [
+                    ("Empresa", false),
+                    ("NIF", false),
+                    ("Nº contratos", true),
+                    ("Importe total", true),
+                ] {
+                    h.col(|ui| {
+                        pad_cela(ui);
+                        let txt = RichText::new(t).strong();
+                        if num {
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                ui.label(txt);
+                            });
+                        } else {
+                            ui.label(txt);
+                        }
+                    });
+                }
+            })
+            .body(|body| {
+                body.rows(22.0, empresas.len(), |mut row| {
+                    let e = &empresas[row.index()];
+                    row.col(|ui| {
+                        pad_cela(ui);
+                        ui.label(&e.nome);
+                    });
+                    row.col(|ui| {
+                        pad_cela(ui);
+                        ui.label(RichText::new(&e.nif).monospace());
+                    });
+                    row.col(|ui| {
+                        pad_cela(ui);
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            ui.label(e.num_contratos.to_string());
+                        });
+                    });
+                    row.col(|ui| {
+                        pad_cela(ui);
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            ui.label(format_importe(e.importe_total));
+                        });
+                    });
+                });
+            });
     }
 
     /// Vista de relacións: grupos de razóns sociais que concorreron xuntas nunha

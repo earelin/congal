@@ -273,6 +273,19 @@ pub struct Ute {
     pub membros: Vec<UteMembro>,
 }
 
+/// Unha razón social adxudicataria de contratos, agregada para a vista de
+/// empresas: o seu nome representativo, o NIF, o número de contratos distintos
+/// nos que é adxudicataria e a suma dos importes adxudicados. Constrúese só con
+/// datos de contratosdegalicia.gal (a táboa `contract_resolucion`).
+#[derive(Debug, Clone)]
+pub struct EmpresaContratos {
+    /// NIF/CIF da empresa (baleiro se non se coñece).
+    pub nif: String,
+    pub nome: String,
+    pub num_contratos: i64,
+    pub importe_total: f64,
+}
+
 /// Unha razón social que forma parte dun grupo por compartir UTE con outras.
 #[derive(Debug, Clone)]
 pub struct EmpresaNodo {
